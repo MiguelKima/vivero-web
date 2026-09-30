@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Registro de Servicios - Vivero</title>
+    <link rel="stylesheet" href="/style.css">
+    
+    <!-- GUARDIÁN DE SEGURIDAD -->
+    <script>
+        if (!localStorage.getItem('usuarioLogueado')) {
+            window.location.replace('/'); 
+        }
+    </script>
+</head>
+<body>
+    <header>
+        <h1>Sistema de Administración | Vivero</h1>
+        <nav>
+            <a href="dashboard.html">Inicio</a>
+            <a href="registro-proveedor.html">Proveedores</a>
+            <a href="registro-cliente.html">Clientes</a>
+            <a href="registro-empleado.html">Empleados</a>
+            <a href="registro-catalogo-servicio.html">Catálogo Servicios</a>
+            <a href="registro-producto.html">Productos</a>
+            <a href="registro-planta.html">Plantas</a>
+            <a href="registro-pedido.html">Pedidos</a>
+            <a href="registro-venta.html">Ventas</a>
+            <a href="registro-servicio.html">Servicios</a>
+            <a href="/" onclick="localStorage.clear()" style="color: #ff8fab;">Cerrar Sesión</a>
+        </nav>
+    </header>
+
+    <div class="container">
+        <div class="card" style="max-width: 600px; margin: auto;">
+            <h2>Alta de Servicio Profesional</h2>
+            <form onsubmit="guardarServicio(event)">
+                <div class="form-group">
+                    <label>Cliente:</label>
+                    <select id="id_cli" required>
+                        <option value="">Cargando clientes...</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Recomendación / Seleccionar del Catálogo de Servicios:</label>
+                    <select id="catalogo_serv" onchange="seleccionarServicioCatalogo()">
+                        <option value="">-- Seleccione un servicio del catálogo (Opcional) --</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Trabajo Realizado / Descripción:</label>
+                    <input type="text" id="trabajo" required placeholder="Ej. Mantenimiento de áreas verdes">
+                </div>
+
+                <div class="form-group">
+                    <label>Fecha de Realización / Ejecución:</label>
+                    <input type="date" id="fecha_ejec" required>
+                </div>
+
+                <div class="form-group">
+                    <label>Costo del Servicio ($):</label>
+                    <input type="number" id="costo" step="0.01" required placeholder="0.00">
+                </div>
+
+                <div class="form-group">
+                    <label>Empleado Responsable:</label>
+                    <select id="id_emp" required>
+                        <option value="">Cargando empleados...</option>
+                    </select>
+                </div>
+
+                <button type="submit">Registrar Servicio</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal Corporativo -->
+    <div id="modalMensaje" class="custom-modal">
+        <div class="custom-modal-content">
+            <h3 id="tituloModal">Aviso del Sistema</h3>
+            <p id="textoModal">Mensaje informativo.</p>
+            <button onclick="cerrarModal()">Aceptar</button>
+        </div>
+    </div>
+
+    <script>
+        let esExito = false;
+        let listaCatalogo = [];
+
+        window.onload = function() {
+            // Asignar fecha actual por defecto al campo de fecha
+            const hoy = new Date().toISOString().split('T')[0];
+            document.getElementById('fecha_ejec').value = hoy;
+
+            // Cargar clientes
+            fetch('/api/clientes')
+                .then(res => res.json())
+                .then(data => {
+                    const sel = document.getElementById('id_cli');
+                    sel.innerHTML = '<option value="">Seleccione un cliente</option>';
+                    if(data && data.length > 0) {
+                        data.forEach(c => {
+                            sel.innerHTML += `<option value="${c.ID_CLI}">${c.NOM_CLI} (${c.ID_CLI})</option>`;
+                        });
+                    } else {
+                        sel.innerHTML = '<option value="">No hay clientes registrados</option>';
+                    }
+                })
+                .catch(err => console.error("Error cargando clientes:", err));
+
+            // Cargar Catálogo de Servicios para las recomendaciones
+            fetch('/api/catalogo-servicios')
+                .then(res => res.json())
+                .then(data => {
+                    listaCatalogo = data;
+                    const sel = document.getElementById('catalogo_serv');
+                    if(data && data.length > 0) {
+                        data.forEach(s => {
+                            sel.innerHTML += `<option value="${s.ID_CAT_SERV}">${s.NOM_SERV} - $${s.COSTO_EST.toFixed(2)}</option>`;
+                        });
+                    }
+                })
+                .catch(err => console.error("Error cargando catálogo:", err));
+
+            // Cargar empleados
+            fetch('/api/empleados')
+                .then(res => res.json())
+                .then(data => {
+                    const sel = document.getElementById('id_emp');
+                    sel.innerHTML = '<option value="">Seleccione un empleado</option>';
+                    if(data && data.length > 0) {
+                        data.forEach(e => {
+                            sel.innerHTML += `<option value="${e.ID_EMP}">${e.NOM_EMP} (${e.PUE_EMP})</option>`;
+                        });
+                    } else {
+                        sel.innerHTML = '<option value="">No hay empleados registrados</option>';
+                    }
+                })
+                .catch(err => console.error("Error cargando empleados:", err));
+        };
+
+        function seleccionarServicioCatalogo() {
+            const idCat = document.getElementById('catalogo_serv').value;
+            if(!idCat) return;
+
+            const servEncontrado = listaCatalogo.find(s => s.ID_CAT_SERV === idCat);
+            if(servEncontrado) {
+                document.getElementById('trabajo').value = servEncontrado.NOM_SERV;
+                document.getElementById('costo').value = servEncontrado.COSTO_EST.toFixed(2);
+            }
+        }
+
+        function guardarServicio(event) {
+            event.preventDefault();
+            const datos = {
+                id_cli: document.getElementById('id_cli').value,
+                trabajo: document.getElementById('trabajo').value,
+                fecha_ejec: document.getElementById('fecha_ejec').value,
+                costo: document.getElementById('costo').value,
+                id_emp: document.getElementById('id_emp').value
+            };
+
+            fetch('/api/servicios', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(datos)
+            })
+            .then(async res => {
+                const data = await res.json();
+                if(res.ok && data.exito) {
+                    esExito = true;
+                    document.getElementById('tituloModal').innerText = "Registro Exitoso";
+                    document.getElementById('textoModal').innerText = data.mensaje;
+                } else {
+                    esExito = false;
+                    document.getElementById('tituloModal').innerText = "Aviso";
+                    document.getElementById('textoModal').innerText = data.error || "No se pudo registrar el servicio.";
+                }
+                document.getElementById('modalMensaje').style.display = 'flex';
+            })
+            .catch(err => {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Error de Servidor";
+                document.getElementById('textoModal').innerText = "Error de comunicación con la base de datos.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+            });
+        }
+
+        function cerrarModal() {
+            document.getElementById('modalMensaje').style.display = 'none';
+            if(esExito) {
+                window.location.href = 'dashboard.html';
+            }
+        }
+    </script>
+</body>
+</html>

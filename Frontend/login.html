@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Iniciar Sesión - Vivero</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body style="display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f8f9fa;">
+    <div class="card" style="width: 100%; max-width: 400px; padding: 30px;">
+        <h2 style="text-align: center; color: var(--primary-color);">Vivero | Iniciar Sesión</h2>
+        <form onsubmit="realizarLogin(event)" style="margin-top: 20px;">
+            <div class="form-group">
+                <label>Usuario:</label>
+                <input type="text" id="username" required placeholder="Ingrese su usuario">
+            </div>
+            <div class="form-group">
+                <label>Contraseña:</label>
+                <input type="password" id="password" required placeholder="Ingrese su contraseña">
+            </div>
+            <button type="submit" style="width: 100%; margin-top: 10px;">Ingresar</button>
+        </form>
+    </div>
+
+    <!-- Modal Corporativo -->
+    <div id="modalMensaje" class="custom-modal">
+        <div class="custom-modal-content">
+            <h3 id="tituloModal">Aviso del Sistema</h3>
+            <p id="textoModal">Mensaje informativo.</p>
+            <button onclick="cerrarModal()">Aceptar</button>
+        </div>
+    </div>
+
+    <script>
+        function realizarLogin(event) {
+            event.preventDefault();
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+
+            fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.exito) {
+                    localStorage.setItem('usuarioLogueado', data.usuario.USERNAME);
+                    localStorage.setItem('rolUsuario', data.usuario.ROL);
+                    window.location.href = 'dashboard.html';
+                } else {
+                    document.getElementById('tituloModal').innerText = "Acceso Denegado";
+                    document.getElementById('textoModal').innerText = data.error || "Credenciales incorrectas.";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                }
+            })
+            .catch(err => {
+                document.getElementById('tituloModal').innerText = "Error";
+                document.getElementById('textoModal').innerText = "Error de conexión con el servidor.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+            });
+        }
+
+        function cerrarModal() {
+            document.getElementById('modalMensaje').style.display = 'none';
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Registro de Pedidos - Vivero</title>
+    <link rel="stylesheet" href="/style.css">
+    
+    <!-- GUARDIÁN DE SEGURIDAD -->
+    <script>
+        if (!localStorage.getItem('usuarioLogueado')) {
+            window.location.replace('/'); 
+        }
+    </script>
+
+    <style>
+        .ticket-box {
+            background: #fff;
+            padding: 20px;
+            border: 1px dashed #333;
+            font-family: 'Courier New', Courier, monospace;
+            width: 320px;
+            margin: auto;
+            text-align: left;
+        }
+        @media print {
+            body * { visibility: hidden; }
+            #contenidoModalTicket, #contenidoModalTicket * { visibility: visible; }
+            #contenidoModalTicket { position: absolute; left: 0; top: 0; width: 100%; }
+            .custom-modal { background: none !important; }
+            #modalMensaje { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Sistema de Administración | Vivero</h1>
+        <nav>
+            <a href="dashboard.html">Inicio</a>
+            <a href="registro-proveedor.html">Proveedores</a>
+            <a href="registro-cliente.html">Clientes</a>
+            <a href="registro-empleado.html">Empleados</a>
+            <a href="registro-catalogo-servicio.html">Catálogo Servicios</a>
+            <a href="registro-producto.html">Productos</a>
+            <a href="registro-planta.html">Plantas</a>
+            <a href="registro-pedido.html">Pedidos</a>
+            <a href="registro-venta.html">Ventas</a>
+            <a href="registro-servicio.html">Servicios</a>
+            <a href="/" onclick="localStorage.clear()" style="color: #ff8fab;">Cerrar Sesión</a>
+        </nav>
+    </header>
+
+    <div class="container">
+        <!-- Formulario de Pedidos -->
+        <div class="card" style="max-width: 600px; margin: auto; margin-bottom: 30px;">
+            <h2>Alta de Nuevo Pedido</h2>
+            <form id="formPedido" onsubmit="guardarPedido(event)">
+                
+                <div class="form-group">
+                    <label>Tipo de Pedido:</label>
+                    <select id="tip_ped" required>
+                        <option value="">Seleccione el tipo de pedido</option>
+                        <option value="Mayoreo">Mayoreo</option>
+                        <option value="Menudeo">Menudeo</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Tipo de Envío:</label>
+                    <select id="tip_env" required onchange="toggleDireccionEnvio()">
+                        <option value="">Seleccione el tipo de envío</option>
+                        <option value="A domicilio">A domicilio</option>
+                        <option value="Recogida en tienda">Recogida en tienda</option>
+                    </select>
+                </div>
+
+                <div class="form-group" id="grupo_dir_envio" style="display: none;">
+                    <label>Dirección de Envío:</label>
+                    <input type="text" id="dir_envio" placeholder="Ej. Av. Insurgentes Sur 400, CDMX">
+                </div>
+
+                <div class="form-group">
+                    <label>Cliente:</label>
+                    <select id="id_cli" required>
+                        <option value="">Cargando clientes...</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Producto del Inventario (Opcional):</label>
+                    <select id="id_pro" onchange="calcularTotalPedido()">
+                        <option value="">Ninguno / Seleccione producto</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Cantidad de Producto:</label>
+                    <input type="number" id="num_can" min="0" value="0" oninput="calcularTotalPedido()">
+                </div>
+
+                <div class="form-group">
+                    <label>Planta del Vivero (Opcional):</label>
+                    <select id="id_planta" onchange="calcularTotalPedido()">
+                        <option value="">Ninguna / Seleccione planta</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Cantidad de Plantas:</label>
+                    <input type="number" id="num_can_plant" min="0" value="0" oninput="calcularTotalPedido()">
+                </div>
+
+                <div class="form-group">
+                    <label>Total del Pedido ($) [Calculado Automáticamente]:</label>
+                    <input type="number" id="tot_pedido" step="0.01" readonly style="background-color: #e9ecef; font-weight: bold;" placeholder="0.00">
+                </div>
+
+                <div class="form-group">
+                    <label>Repartidor Asignado:</label>
+                    <select id="id_rep" required>
+                        <option value="">Cargando repartidor...</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Tiempo Estimado de Entrega:</label>
+                    <input type="text" id="tiem_entrega" required placeholder="Ej. 2 horas / 3 días">
+                </div>
+
+                <button type="submit">Registrar Pedido</button>
+            </form>
+        </div>
+
+        <!-- Historial de Pedidos -->
+        <div class="card">
+            <h2>Historial de Pedidos Realizados</h2>
+            <div id="contenedor-historial" style="margin-top: 20px;">
+                <p>Cargando historial...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Avisos Generales -->
+    <div id="modalMensaje" class="custom-modal">
+        <div class="custom-modal-content">
+            <h3 id="tituloModal">Aviso del Sistema</h3>
+            <p id="textoModal">Mensaje informativo.</p>
+            <button onclick="cerrarModal()">Aceptar</button>
+        </div>
+    </div>
+
+    <!-- Modal de TICKET -->
+    <div id="modalTicket" class="custom-modal">
+        <div class="custom-modal-content" style="max-width: 450px; text-align: center;">
+            <h3 id="tituloModalTicket">Ticket de Pedido</h3>
+            <div id="contenidoModalTicket" style="margin: 15px 0;"></div>
+            <div style="display: flex; gap: 10px; justify-content: center;">
+                <button onclick="window.print()" style="background-color: var(--secondary-color); padding: 10px 20px;">Imprimir Ticket</button>
+                <button onclick="cerrarModalTicket()" style="background-color: #6c757d; padding: 10px 20px;">Aceptar</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let listaProductos = [];
+        let listaPlantas = [];
+        let pedidosGlobales = [];
+
+        window.onload = function() {
+            // Cargar clientes
+            fetch('/api/clientes').then(res => res.json()).then(data => {
+                const sel = document.getElementById('id_cli');
+                sel.innerHTML = '<option value="">Seleccione un cliente</option>';
+                data.forEach(c => sel.innerHTML += `<option value="${c.ID_CLI}">${c.NOM_CLI} (${c.ID_CLI})</option>`);
+            });
+
+            // Cargar productos
+            fetch('/api/productos').then(res => res.json()).then(data => {
+                listaProductos = data;
+                const sel = document.getElementById('id_pro');
+                sel.innerHTML = '<option value="">Ninguno / Seleccione producto</option>';
+                data.forEach(p => {
+                    const precio = parseFloat(p.PREC_PRO) || 0;
+                    sel.innerHTML += `<option value="${p.ID_PRO}">${p.DESC_PRO} ($${precio.toFixed(2)})</option>`;
+                });
+            });
+
+            // Cargar plantas
+            fetch('/api/plantas').then(res => res.json()).then(data => {
+                listaPlantas = data;
+                const sel = document.getElementById('id_planta');
+                sel.innerHTML = '<option value="">Ninguna / Seleccione planta</option>';
+                data.forEach(pl => {
+                    const precio = parseFloat(pl.PREC_PLANTA) || 0;
+                    sel.innerHTML += `<option value="${pl.ID_PLANTA}">${pl.NOM_COM || pl.NOM_CTFO} ($${precio.toFixed(2)})</option>`;
+                });
+            });
+
+            // Cargar empleados (repartidores)
+            fetch('/api/empleados').then(res => res.json()).then(data => {
+                const sel = document.getElementById('id_rep');
+                sel.innerHTML = '<option value="">Seleccione un repartidor</option>';
+                data.forEach(e => sel.innerHTML += `<option value="${e.ID_EMP}">${e.NOM_EMP} - ${e.PUE_EMP}</option>`);
+            });
+
+            cargarHistorialPedidos();
+        };
+
+        function calcularTotalPedido() {
+            const idProd = document.getElementById('id_pro').value;
+            const idPlanta = document.getElementById('id_planta').value;
+            const cantProd = parseInt(document.getElementById('num_can').value) || 0;
+            const cantPlanta = parseInt(document.getElementById('num_can_plant').value) || 0;
+
+            let precioProd = 0;
+            let precioPlanta = 0;
+
+            if (idProd) {
+                const p = listaProductos.find(x => x.ID_PRO === idProd);
+                if (p) precioProd = parseFloat(p.PREC_PRO) || 0;
+            }
+            if (idPlanta) {
+                const pl = listaPlantas.find(x => x.ID_PLANTA === idPlanta);
+                if (pl) precioPlanta = parseFloat(pl.PREC_PLANTA) || 0;
+            }
+
+            const total = (precioProd * cantProd) + (precioPlanta * cantPlanta);
+            document.getElementById('tot_pedido').value = total.toFixed(2);
+        }
+
+        function toggleDireccionEnvio() {
+            const tipoEnvio = document.getElementById('tip_env').value;
+            const grupoDir = document.getElementById('grupo_dir_envio');
+            const inputDir = document.getElementById('dir_envio');
+
+            if (tipoEnvio === 'A domicilio') {
+                grupoDir.style.display = 'block';
+                inputDir.required = true;
+            } else {
+                grupoDir.style.display = 'none';
+                inputDir.required = false;
+                inputDir.value = '';
+            }
+        }
+
+        // CARGAR EL HISTORIAL
+        function cargarHistorialPedidos() {
+            return fetch('/api/pedidos')
+                .then(res => res.json())
+                .then(pedidos => {
+                    pedidosGlobales = pedidos;
+                    const contenedor = document.getElementById('contenedor-historial');
+                    if(pedidos.length === 0) {
+                        contenedor.innerHTML = '<p>No hay pedidos registrados.</p>';
+                        return;
+                    }
+
+                    let tabla = `
+                        <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+                            <thead>
+                                <tr style="background-color: #f1f3f5; text-align: left; border-bottom: 2px solid #dee2e6;">
+                                    <th style="padding: 10px;">ID Pedido</th>
+                                    <th style="padding: 10px;">Cliente</th>
+                                    <th style="padding: 10px;">Envío</th>
+                                    <th style="padding: 10px;">Total</th>
+                                    <th style="padding: 10px; text-align: center;">Ticket</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                    `;
+
+                    pedidos.forEach(p => {
+                        tabla += `
+                            <tr style="border-bottom: 1px solid #dee2e6;">
+                                <td style="padding: 10px;">${p.ID_PED}</td>
+                                <td style="padding: 10px;">${p.NOM_CLI}</td>
+                                <td style="padding: 10px;">${p.TIP_ENV}</td>
+                                <td style="padding: 10px; font-weight: bold;">$${parseFloat(p.TOT_PEDIDO).toFixed(2)}</td>
+                                <td style="padding: 10px; text-align: center;">
+                                    <button type="button" onclick="verTicket('${p.ID_PED}')" style="background-color: var(--secondary-color); padding: 6px 12px; font-size: 13px;">Ver Ticket</button>
+                                </td>
+                            </tr>
+                        `;
+                    });
+
+                    tabla += `</tbody></table>`;
+                    contenedor.innerHTML = tabla;
+                })
+                .catch(err => {
+                    document.getElementById('contenedor-historial').innerHTML = '<p style="color: red;">Error al obtener el historial.</p>';
+                });
+        }
+
+        // MOSTRAR TICKET
+        function verTicket(idPedido) {
+            const p = pedidosGlobales.find(x => x.ID_PED === idPedido);
+            if (!p) return;
+
+            const generador = localStorage.getItem('usuarioLogueado') || 'Administrador';
+
+            let articulosHTML = '';
+            if (p.DESC_PRO && p.DESC_PRO !== 'N/A') articulosHTML += `- Prod: ${p.DESC_PRO} (Cant: ${p.NUM_CAN})<br>`;
+            if (p.NOM_PLANTA && p.NOM_PLANTA !== 'N/A') articulosHTML += `- Planta: ${p.NOM_PLANTA} (Cant: ${p.NUM_CAN_PLANT})<br>`;
+
+            const contenido = `
+                <div class="ticket-box">
+                    <center><strong>VIVERO LA PLAZA</strong><br>
+                    Comprobante de Pedido<br>
+                    ----------------------------------</center>
+                    <strong>Ticket Pedido:</strong> ${p.ID_PED}<br>
+                    <strong>Tipo de Pedido:</strong> ${p.TIP_PED}<br>
+                    <strong>Cliente:</strong> ${p.NOM_CLI}<br>
+                    <strong>Atendió:</strong> ${generador}<br>
+                    ----------------------------------<br>
+                    <strong>Artículo(s):</strong><br>
+                    ${articulosHTML}
+                    ----------------------------------<br>
+                    <strong>Envío:</strong> ${p.TIP_ENV}<br>
+                    <strong>Dirección:</strong> ${p.DIR_ENVIO}<br>
+                    <strong>Repartidor:</strong> ${p.REPARTIDOR}<br>
+                    <strong>Tiempo Est.:</strong> ${p.TIEM_ENTREGA}<br>
+                    ----------------------------------<br>
+                    <strong>Total del Pedido:</strong> $${parseFloat(p.TOT_PEDIDO).toFixed(2)}<br>
+                    <center>----------------------------------<br>
+                    ¡GRACIAS POR SU COMPRA!</center>
+                </div>
+            `;
+
+            document.getElementById('tituloModalTicket').innerText = `Ticket de Pedido (${p.ID_PED})`;
+            document.getElementById('contenidoModalTicket').innerHTML = contenido;
+            document.getElementById('modalTicket').style.display = 'flex';
+        }
+
+        function guardarPedido(event) {
+            event.preventDefault();
+
+            const idPro = document.getElementById('id_pro').value;
+            const idPlanta = document.getElementById('id_planta').value;
+            const totalPedido = parseFloat(document.getElementById('tot_pedido').value) || 0;
+
+            if (!idPro && !idPlanta) {
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "Debe seleccionar al menos un producto o una planta para el pedido.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            const datos = {
+                tip_ped: document.getElementById('tip_ped').value,
+                tip_env: document.getElementById('tip_env').value,
+                dir_envio: document.getElementById('dir_envio').value || null,
+                id_cli: document.getElementById('id_cli').value,
+                id_pro: idPro || null,
+                num_can: document.getElementById('num_can').value || 0,
+                id_planta: idPlanta || null,
+                num_can_plant: document.getElementById('num_can_plant').value || 0,
+                id_rep: document.getElementById('id_rep').value,
+                tiem_entrega: document.getElementById('tiem_entrega').value,
+                tot_pedido: totalPedido
+            };
+
+            fetch('/api/pedidos', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(datos)
+            })
+            .then(async res => {
+                const data = await res.json();
+                if(res.ok && data.exito) {
+                    // Recargar la tabla y abrir el ticket
+                    cargarHistorialPedidos().then(() => {
+                        verTicket(data.ticket.id_ped);
+                        document.getElementById('formPedido').reset();
+                        document.getElementById('tot_pedido').value = '';
+                        toggleDireccionEnvio();
+                    });
+                } else {
+                    document.getElementById('tituloModal').innerText = "Aviso";
+                    document.getElementById('textoModal').innerText = data.error || "No se pudo registrar el pedido.";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                }
+            })
+            .catch(err => {
+                document.getElementById('tituloModal').innerText = "Error de Servidor";
+                document.getElementById('textoModal').innerText = "Error de comunicación con la base de datos.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+            });
+        }
+
+        function cerrarModal() {
+            document.getElementById('modalMensaje').style.display = 'none';
+        }
+        function cerrarModalTicket() {
+            document.getElementById('modalTicket').style.display = 'none';
+        }
+    </script>
+</body>
+</html>

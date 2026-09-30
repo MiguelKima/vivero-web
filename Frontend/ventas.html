@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Registrar Venta</title>
+    <style>
+        body { font-family: sans-serif; background: #f4f7f6; padding: 20px; }
+        .formulario { background: white; padding: 20px; border-radius: 8px; max-width: 400px; }
+        input, button { width: 100%; padding: 10px; margin: 10px 0; box-sizing: border-box; }
+        button { background: #2d6a4f; color: white; border: none; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h2>💰 Registrar Nueva Venta</h2>
+    <div class="formulario">
+        <!-- Aquí agregaremos los campos que tengas en tu tabla VENTAS -->
+        <input type="text" id="producto" placeholder="Nombre del producto">
+        <input type="number" id="cantidad" placeholder="Cantidad">
+        <input type="number" id="total" placeholder="Total ($)">
+        <button onclick="guardarVenta()">Guardar Venta</button>
+    </div>
+    <script>
+        function guardarVenta() {
+            // Aquí conectaremos con el backend en el siguiente paso
+            alert("Botón presionado. Listo para conectar a SQL.");
+        }
+    </script>
+</body>
+</html>

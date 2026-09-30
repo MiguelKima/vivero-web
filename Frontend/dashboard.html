@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Panel de Control - Vivero</title>
+    <link rel="stylesheet" href="/style.css">
+    
+    <!-- GUARDIÁN DE SEGURIDAD -->
+    <script>
+        if (!localStorage.getItem('usuarioLogueado')) {
+            window.location.replace('/'); 
+        }
+    </script>
+
+    <style>
+        .grid-dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .table-scroll {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        th, td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #dee2e6;
+            text-align: left;
+            background-color: #fff;
+        }
+        td:first-child, th:first-child {
+            white-space: nowrap;
+            font-weight: 600;
+            color: var(--primary-color);
+        }
+        th {
+            background-color: #f1f3f5;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+        .btn-editar {
+            background-color: #ffc107;
+            color: #000;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 11px;
+        }
+        .btn-editar:hover {
+            background-color: #e0a800;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Sistema de Administración | Vivero</h1>
+        <nav>
+            <a href="dashboard.html">Inicio</a>
+            <a href="registro-proveedor.html">Proveedores</a>
+            <a href="registro-cliente.html">Clientes</a>
+            <a href="registro-empleado.html">Empleados</a>
+            <a href="registro-catalogo-servicio.html">Catálogo Servicios</a>
+            <a href="registro-producto.html">Productos</a>
+            <a href="registro-planta.html">Plantas</a>
+            <a href="registro-pedido.html">Pedidos</a>
+            <a href="registro-venta.html">Ventas</a>
+            <a href="registro-servicio.html">Servicios</a>
+            <a href="/" onclick="localStorage.clear()" style="color: #ff8fab;">Cerrar Sesión</a>
+        </nav>
+    </header>
+
+    <div class="container" style="max-width: 1400px;">
+        <h2 style="color: var(--primary-color); margin-bottom: 5px;">Panel General de Inventarios y Registros</h2>
+        <p style="color: #666; margin-bottom: 20px;">Visualización compacta de todas las tablas. (Los Administradores pueden editar registros).</p>
+
+        <div class="grid-dashboard">
+            <div class="card" style="margin: 0;"><h3 style="font-size: 15px; margin-bottom: 10px;">Plantas</h3><div class="table-scroll" id="tabla-plantas"><p style="padding: 10px;">Cargando...</p></div></div>
+            <div class="card" style="margin: 0;"><h3 style="font-size: 15px; margin-bottom: 10px;">Productos</h3><div class="table-scroll" id="tabla-productos"><p style="padding: 10px;">Cargando...</p></div></div>
+            <div class="card" style="margin: 0;"><h3 style="font-size: 15px; margin-bottom: 10px;">Clientes</h3><div class="table-scroll" id="tabla-clientes"><p style="padding: 10px;">Cargando...</p></div></div>
+            <div class="card" style="margin: 0;"><h3 style="font-size: 15px; margin-bottom: 10px;">Proveedores</h3><div class="table-scroll" id="tabla-proveedores"><p style="padding: 10px;">Cargando...</p></div></div>
+            <div class="card" style="margin: 0;"><h3 style="font-size: 15px; margin-bottom: 10px;">Empleados</h3><div class="table-scroll" id="tabla-empleados"><p style="padding: 10px;">Cargando...</p></div></div>
+            <div class="card" style="margin: 0;"><h3 style="font-size: 15px; margin-bottom: 10px;">Pedidos</h3><div class="table-scroll" id="tabla-pedidos"><p style="padding: 10px;">Cargando...</p></div></div>
+            <div class="card" style="margin: 0;"><h3 style="font-size: 15px; margin-bottom: 10px;">Ventas</h3><div class="table-scroll" id="tabla-ventas"><p style="padding: 10px;">Cargando...</p></div></div>
+            <div class="card" style="margin: 0;"><h3 style="font-size: 15px; margin-bottom: 10px;">Servicios</h3><div class="table-scroll" id="tabla-servicios"><p style="padding: 10px;">Cargando...</p></div></div>
+            <div class="card" style="margin: 0;"><h3 style="font-size: 15px; margin-bottom: 10px;">Catálogo de Servicios</h3><div class="table-scroll" id="tabla-cat-servicios"><p style="padding: 10px;">Cargando...</p></div></div>
+        </div>
+
+        <div id="seccionAdmin" style="margin-top: 30px; display: none; text-align: center;">
+            <div class="card" style="background-color: #f8f9fa; border: 2px dashed var(--secondary-color); max-width: 450px; margin: auto; padding: 20px;">
+                <h3 style="color: var(--primary-color); margin-top: 0;">Panel de Control Administrativo</h3>
+                <p style="font-size: 14px; color: #555;">Tienes privilegios de Administrador. Puedes gestionar los accesos al sistema.</p>
+                <a href="registro-usuario.html" style="display: inline-block; background-color: var(--secondary-color); color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; font-weight: 600;">Gestionar Usuarios</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL EDITOR MAESTRO -->
+    <div id="modalEditor" class="custom-modal">
+        <div class="custom-modal-content" style="max-width: 400px; text-align: left;">
+            <h3 id="tituloEditor" style="color: var(--primary-color); border-bottom: 1px solid #ccc; padding-bottom: 10px;">Editar Registro</h3>
+            <form id="formEditor" onsubmit="guardarEdicion(event)">
+                <input type="hidden" id="editTabla">
+                <input type="hidden" id="editIdCol">
+                <input type="hidden" id="editIdValue">
+                
+                <div id="contenedorCampos" style="max-height: 400px; overflow-y: auto; padding: 15px 0;">
+                    <!-- Los campos se generarán automáticamente aquí -->
+                </div>
+                
+                <div style="display: flex; gap: 10px; margin-top: 10px;">
+                    <button type="submit" style="background-color: var(--primary-color); color: white; padding: 10px; border:none; border-radius:4px; cursor:pointer; flex: 1; font-weight: bold;">Guardar Cambios</button>
+                    <button type="button" onclick="cerrarEditor()" style="background-color: #6c757d; color: white; padding: 10px; border:none; border-radius:4px; cursor:pointer; flex: 1;">Cancelar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        let isAdmin = false;
+
+        window.onload = function() {
+            const rol = localStorage.getItem('rolUsuario');
+            if (rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador')) {
+                isAdmin = true;
+                document.getElementById('seccionAdmin').style.display = 'block';
+            }
+
+            // Llamadas dinámicas: ID Tabla | Cabeceras Visuales | Columnas Reales de SQL | Data | Config del backend
+            fetch('/api/plantas').then(res => res.json()).then(data => llenarTabla('tabla-plantas', ['ID', 'Científico', 'Stock'], ['ID_PLANTA', 'NOM_CTFO', 'STOCK_PLANT'], data, { tablaSQL: 'PLANTAS', idCol: 'ID_PLANTA' }));
+            fetch('/api/dashboard/productos').then(res => res.json()).then(data => llenarTabla('tabla-productos', ['ID', 'Descripción', 'Stock', 'Precio'], ['ID_PRO', 'DESC_PRO', 'STOCK_PRO', 'PREC_PRO'], data, { tablaSQL: 'PRODUCTOS', idCol: 'ID_PRO' }));
+            fetch('/api/dashboard/clientes').then(res => res.json()).then(data => llenarTabla('tabla-clientes', ['ID', 'Nombre', 'Teléfono'], ['ID_CLI', 'NOM_CLI', 'TEL_CLI'], data, { tablaSQL: 'CLIENTES', idCol: 'ID_CLI' }));
+            fetch('/api/dashboard/proveedores').then(res => res.json()).then(data => llenarTabla('tabla-proveedores', ['ID', 'Nombre', 'RFC'], ['ID_PROV', 'NOM_PROV', 'RFC_PROV'], data, { tablaSQL: 'PROVEEDORES', idCol: 'ID_PROV' }));
+            fetch('/api/dashboard/empleados').then(res => res.json()).then(data => llenarTabla('tabla-empleados', ['ID', 'Nombre', 'Puesto'], ['ID_EMP', 'NOM_EMP', 'PUE_EMP'], data, { tablaSQL: 'EMPLEADOS', idCol: 'ID_EMP' }));
+            fetch('/api/dashboard/pedidos').then(res => res.json()).then(data => llenarTabla('tabla-pedidos', ['ID', 'Tipo', 'Cliente', 'Total'], ['ID_PED', 'TIP_PED', 'ID_CLI', 'TOT_PEDIDO'], data, { tablaSQL: 'PEDIDOS', idCol: 'ID_PED' }));
+            fetch('/api/dashboard/ventas').then(res => res.json()).then(data => llenarTabla('tabla-ventas', ['ID Venta', 'Cliente', 'Pago', 'Total'], ['ID_VEN', 'ID_CLI', 'FORM_PAGO', 'TOT_PAGO'], data, { tablaSQL: 'VENTAS', idCol: 'ID_VEN' }));
+            fetch('/api/dashboard/servicios').then(res => res.json()).then(data => llenarTabla('tabla-servicios', ['ID', 'Cliente', 'Trabajo', 'Costo'], ['ID_SERV', 'ID_CLI', 'TRAB_REAL', 'COSTO_SERV'], data, { tablaSQL: 'SERVICIOS', idCol: 'ID_SERV' }));
+            fetch('/api/dashboard/catalogo-servicios').then(res => res.json()).then(data => llenarTabla('tabla-cat-servicios', ['ID', 'Servicio', 'Costo Est.'], ['ID_CAT_SERV', 'NOM_SERV', 'COSTO_EST'], data, { tablaSQL: 'CAT_SERVICIOS', idCol: 'ID_CAT_SERV' }));
+        };
+
+        function llenarTabla(elementId, headers, keysSQL, datos, config) {
+            const contenedor = document.getElementById(elementId);
+            if(!datos || datos.length === 0) {
+                contenedor.innerHTML = '<p style="padding: 10px; font-size: 13px; color: #777;">Sin registros.</p>';
+                return;
+            }
+            let html = `<table><thead><tr>`;
+            headers.forEach(h => html += `<th>${h}</th>`);
+            if (isAdmin) html += `<th>Acc.</th>`; // Columna de Acciones
+            html += `</tr></thead><tbody>`;
+
+            datos.forEach(item => { 
+                html += `<tr>`;
+                keysSQL.forEach(k => {
+                    let val = item[k] !== null ? item[k] : '';
+                    if (typeof val === 'number' && (k.includes('PREC') || k.includes('COSTO') || k.includes('TOT'))) {
+                        html += `<td>$${val.toFixed(2)}</td>`;
+                    } else {
+                        html += `<td>${val}</td>`;
+                    }
+                });
+                
+                // Si es admin, inyectamos la data de la fila directo al botón
+                if (isAdmin) {
+                    const itemDataStr = encodeURIComponent(JSON.stringify(item));
+                    html += `<td><button onclick="abrirEditor('${config.tablaSQL}', '${config.idCol}', decodeURIComponent('${itemDataStr}'))" class="btn-editar">Editar</button></td>`;
+                }
+                html += `</tr>`; 
+            });
+            html += `</tbody></table>`;
+            contenedor.innerHTML = html;
+        }
+
+        function abrirEditor(tabla, idCol, itemStr) {
+            const item = JSON.parse(itemStr);
+            document.getElementById('editTabla').value = tabla;
+            document.getElementById('editIdCol').value = idCol;
+            document.getElementById('editIdValue').value = item[idCol];
+            document.getElementById('tituloEditor').innerText = `Editando: ${item[idCol]}`;
+
+            const contenedor = document.getElementById('contenedorCampos');
+            contenedor.innerHTML = '';
+
+            // Generar un input por cada columna extraída de la base de datos
+            Object.keys(item).forEach(key => {
+                const val = item[key] !== null ? item[key] : '';
+                const isPrimaryKey = (key === idCol);
+                
+                let htmlCampo = `
+                    <div style="margin-bottom: 12px;">
+                        <label style="display: block; font-size: 12px; font-weight: bold; margin-bottom: 4px; color: #555;">${key}</label>
+                        <input type="${typeof val === 'number' ? 'number' : 'text'}" 
+                               step="any"
+                               class="campo-editor"
+                               data-key="${key}"
+                               value="${val}" 
+                               ${isPrimaryKey ? 'readonly style="background-color: #e9ecef; color:#666; border: 1px solid #ccc; width: 100%; padding: 8px; border-radius: 4px;"' : 'style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"'}
+                               required>
+                    </div>
+                `;
+                contenedor.innerHTML += htmlCampo;
+            });
+
+            document.getElementById('modalEditor').style.display = 'flex';
+        }
+
+        function guardarEdicion(event) {
+            event.preventDefault();
+            const tabla = document.getElementById('editTabla').value;
+            const idCol = document.getElementById('editIdCol').value;
+            const idValue = document.getElementById('editIdValue').value;
+
+            const campos = {};
+            const inputs = document.querySelectorAll('.campo-editor');
+            inputs.forEach(input => {
+                const key = input.getAttribute('data-key');
+                if (key !== idCol) {
+                    campos[key] = input.value;
+                }
+            });
+
+            fetch('/api/actualizar', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tabla, idColumn: idCol, idValue, campos })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if(data.exito) {
+                    cerrarEditor();
+                    window.location.reload(); // Recargamos para reflejar los cambios
+                } else {
+                    alert('Error en SQL: ' + data.error);
+                }
+            })
+            .catch(err => alert('Error de comunicación con el servidor'));
+        }
+
+        function cerrarEditor() {
+            document.getElementById('modalEditor').style.display = 'none';
+        }
+    </script>
+</body>
+</html>

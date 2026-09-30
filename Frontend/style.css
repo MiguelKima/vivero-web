@@ -1,0 +1,178 @@
+:root {
+    --primary-color: #1b4332;
+    --secondary-color: #2d6a4f;
+    --bg-color: #f8f9fa;
+    --card-bg: #ffffff;
+    --text-color: #212529;
+    --border-color: #dee2e6;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    margin: 0;
+    padding: 0;
+}
+
+header {
+    background-color: var(--primary-color);
+    color: white;
+    padding: 20px 40px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+header h1 {
+    margin: 0;
+    font-size: 22px;
+}
+
+nav a {
+    color: white;
+    text-decoration: none;
+    margin-left: 20px;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+nav a:hover {
+    text-decoration: underline;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 30px auto;
+    padding: 0 20px;
+}
+
+.card {
+    background-color: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 30px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+h2 {
+    color: var(--primary-color);
+    border-bottom: 2px solid var(--border-color);
+    padding-bottom: 10px;
+    margin-top: 0;
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+input, select {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+
+button {
+    background-color: var(--secondary-color);
+    color: white;
+    border: none;
+    padding: 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    width: 100%;
+    font-weight: 600;
+}
+
+button:hover {
+    background-color: #1b4332;
+}
+
+/* --- ESTILOS PARA MODAL DE ÉXITO / DUPLICIDAD --- */
+.custom-modal {
+    display: none;
+    position: fixed;
+    top: 0; 
+    left: 0; 
+    width: 100%; 
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.custom-modal-content {
+    background: var(--card-bg);
+    padding: 30px;
+    width: 100%;
+    max-width: 380px;
+    border-radius: 6px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    text-align: center;
+    border-top: 4px solid var(--secondary-color);
+}
+
+.custom-modal-content h3 {
+    color: var(--primary-color);
+    margin-top: 0;
+    font-size: 18px;
+}
+
+.custom-modal-content p {
+    color: var(--text-color);
+    font-size: 14px;
+    margin: 15px 0 25px 0;
+}
+
+/* --- ESTILOS DE TICKET PARA VENTAS --- */
+.ticket-modal {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.5);
+    justify-content: center;
+    align-items: center;
+}
+
+.ticket-content {
+    background: white;
+    padding: 30px;
+    width: 320px;
+    border-radius: 4px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+    font-family: 'Courier New', Courier, monospace;
+}
+
+.ticket-header {
+    text-align: center;
+    border-bottom: 1px dashed #000;
+    padding-bottom: 10px;
+    margin-bottom: 15px;
+}
+
+.ticket-body {
+    font-size: 13px;
+    margin-bottom: 20px;
+}
+
+.ticket-footer {
+    text-align: center;
+    font-size: 12px;
+    border-top: 1px dashed #000;
+    padding-top: 10px;
+}
+
+@media print {
+    body * { visibility: hidden; }
+    #ticketImpresion, #ticketImpresion * { visibility: visible; }
+    #ticketImpresion { position: absolute; left: 0; top: 0; width: 100%; }
+    .no-print { display: none; }
+}
