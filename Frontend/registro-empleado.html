@@ -5,11 +5,32 @@
     <title>Registro de Empleados - Vivero</title>
     <link rel="stylesheet" href="/style.css">
     
-    <!-- GUARDIÁN DE SEGURIDAD -->
+    <!-- GUARDIÁN DE SEGURIDAD Y PERMISOS (CU-6 / CU-18 / RN-34 / RN-35) -->
     <script>
-        if (!localStorage.getItem('usuarioLogueado')) {
-            window.location.replace('/'); 
+        function verificarSesion() {
+            if (!localStorage.getItem('usuarioLogueado')) {
+                window.location.replace('/'); 
+                return;
+            }
+            // Bloqueo de acceso para Empleados (CU-18 / RN-34 / RN-35)
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                alert('Acceso no autorizado. Se requieren privilegios de Administrador para gestionar empleados.');
+                window.location.replace('dashboard.html');
+            }
         }
+        verificarSesion();
+        window.addEventListener('pageshow', function(event) {
+            verificarSesion();
+        });
+        document.addEventListener('DOMContentLoaded', function() {
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.querySelectorAll('nav a[href="registro-empleado.html"], nav a[href="registro-usuario.html"], nav a[href="registro-catalogo-servicio.html"]').forEach(el => el.style.display = 'none');
+            }
+        });
     </script>
 </head>
 <body>
@@ -37,32 +58,32 @@
                 
                 <div class="form-group">
                     <label>Tipo de Empleado:</label>
-                    <select id="tip_emp" required>
-                        <option value="">Seleccione una opción...</option>
+                    <select id="tip_emp">
+                        <option value="">Seleccione una opción (Opcional)...</option>
                         <option value="Base">De Base / Planta</option>
                         <option value="Eventual">Eventual / Temporal</option>
                     </select>
                 </div>
 
                 <div class="form-group">
-                    <label>CURP:</label>
-                    <input type="text" id="curp_emp" maxlength="18" required placeholder="Ej. KILM000000XXXXXX00">
+                    <label>CURP (Opcional):</label>
+                    <input type="text" id="curp_emp" maxlength="18" placeholder="Ej. KILM000000XXXXXX00">
                 </div>
 
                 <div class="form-group">
                     <label>Nombre del Empleado:</label>
-                    <input type="text" id="nom_emp" required placeholder="Ej. Miguel">
+                    <input type="text" id="nom_emp" required maxlength="150" placeholder="Ej. Miguel">
                 </div>
 
                 <div class="form-group">
                     <label>Dirección:</label>
-                    <input type="text" id="dir_emp" required placeholder="Ej. CDMX">
+                    <input type="text" id="dir_emp" placeholder="Ej. CDMX">
                 </div>
 
                 <div class="form-group">
                     <label>Puesto:</label>
-                    <select id="pue_emp" required>
-                        <option value="">Seleccione el puesto...</option>
+                    <select id="pue_emp">
+                        <option value="">Seleccione el puesto (Opcional)...</option>
                         <option value="Administrador">Administrador</option>
                         <option value="Cajero">Cajero/a</option>
                         <option value="Jardinero">Jardinero/a</option>
@@ -77,8 +98,8 @@
                 <!-- CAMPO MODIFICADO A SELECT -->
                 <div class="form-group">
                     <label>Horario:</label>
-                    <select id="hor_emp" required>
-                        <option value="">Seleccione el turno...</option>
+                    <select id="hor_emp">
+                        <option value="">Seleccione el turno (Opcional)...</option>
                         <option value="Matutino">Matutino (Mañana)</option>
                         <option value="Vespertino">Vespertino (Tarde)</option>
                         <option value="Tiempo Completo">Tiempo Completo (Mixto)</option>
@@ -89,7 +110,7 @@
 
                 <div class="form-group">
                     <label>Sueldo ($):</label>
-                    <input type="number" id="sue_emp" step="0.01" required placeholder="0.00">
+                    <input type="number" id="sue_emp" step="0.01" min="0" placeholder="0.00">
                 </div>
                 
                 <button type="submit">Guardar Empleado</button>
@@ -110,19 +131,62 @@
 
         function guardarEmpleado(event) {
             event.preventDefault();
+            // Validación con trim() para evitar nombres vacíos o solo con espacios (CU-15 / RN-12)
+            const nom_emp = document.getElementById('nom_emp').value.trim();
+
+            if (!nom_emp) {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "El nombre del empleado es obligatorio y no puede estar vacío ni contener solo espacios.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            // Validación de longitud máxima (CU-16 / RN-19: NOM_EMP VARCHAR(150))
+            if (nom_emp.length > 150) {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Longitud Excedida";
+                document.getElementById('textoModal').innerText = "El nombre del empleado no puede exceder los 150 caracteres.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            const sueVal = document.getElementById('sue_emp').value;
+            let sueldoNum = null;
+
+            if (sueVal !== '') {
+                sueldoNum = parseFloat(sueVal);
+                // Validación de sueldo no negativo (CU-17 / RN-16)
+                if (isNaN(sueldoNum) || sueldoNum < 0) {
+                    esExito = false;
+                    document.getElementById('tituloModal').innerText = "Valor Inválido";
+                    document.getElementById('textoModal').innerText = "El sueldo no puede ser un valor negativo (debe ser mayor o igual a 0).";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
+            }
+
+            const curpVal = document.getElementById('curp_emp').value.trim();
+
             const datos = {
-                tip_emp: document.getElementById('tip_emp').value,
-                curp_emp: document.getElementById('curp_emp').value,
-                nom_emp: document.getElementById('nom_emp').value,
-                dir_emp: document.getElementById('dir_emp').value,
-                pue_emp: document.getElementById('pue_emp').value,
-                hor_emp: document.getElementById('hor_emp').value,
-                sue_emp: document.getElementById('sue_emp').value
+                tip_emp: document.getElementById('tip_emp').value || null,
+                curp_emp: curpVal ? curpVal.toUpperCase() : null,
+                nom_emp: nom_emp,
+                dir_emp: document.getElementById('dir_emp').value.trim() || null,
+                pue_emp: document.getElementById('pue_emp').value || null,
+                hor_emp: document.getElementById('hor_emp').value || null,
+                sue_emp: sueldoNum,
+                rol_solicitante: localStorage.getItem('rolUsuario') || '',
+                usuarioLogueado: localStorage.getItem('usuarioLogueado') || ''
             };
 
             fetch('/api/empleados', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'x-rol-usuario': localStorage.getItem('rolUsuario') || '',
+                    'x-usuario': localStorage.getItem('usuarioLogueado') || ''
+                },
                 body: JSON.stringify(datos)
             })
             .then(async res => {
@@ -133,8 +197,8 @@
                     document.getElementById('textoModal').innerText = data.mensaje;
                 } else {
                     esExito = false;
-                    document.getElementById('tituloModal').innerText = "Aviso de Duplicidad";
-                    document.getElementById('textoModal').innerText = data.error || "Este empleado ya se encuentra registrado.";
+                    document.getElementById('tituloModal').innerText = "Aviso";
+                    document.getElementById('textoModal').innerText = data.error || "No se pudo registrar el empleado.";
                 }
                 document.getElementById('modalMensaje').style.display = 'flex';
             })

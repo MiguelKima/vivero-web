@@ -5,11 +5,30 @@
     <title>Registro de Pedidos - Vivero</title>
     <link rel="stylesheet" href="/style.css">
     
-    <!-- GUARDIÁN DE SEGURIDAD -->
+    <!-- GUARDIÁN DE SEGURIDAD Y CONTROL DE ACCESO (CU-6 / CU-18 / RN-34 / RN-35) -->
     <script>
-        if (!localStorage.getItem('usuarioLogueado')) {
-            window.location.replace('/'); 
+        function verificarSesion() {
+            if (!localStorage.getItem('usuarioLogueado')) {
+                window.location.replace('/'); 
+                return;
+            }
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.documentElement.classList.add('rol-empleado');
+            }
         }
+        verificarSesion();
+        window.addEventListener('pageshow', function(event) {
+            verificarSesion();
+        });
+        document.addEventListener('DOMContentLoaded', function() {
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.querySelectorAll('nav a[href="registro-empleado.html"], nav a[href="registro-usuario.html"], nav a[href="registro-catalogo-servicio.html"]').forEach(el => el.style.display = 'none');
+            }
+        });
     </script>
 
     <style>
@@ -342,6 +361,28 @@
                 document.getElementById('textoModal').innerText = "Debe seleccionar al menos un producto o una planta para el pedido.";
                 document.getElementById('modalMensaje').style.display = 'flex';
                 return;
+            }
+
+            // Validación de existencia de producto (CU-28 / RN-23 / CU-11)
+            if (idPro) {
+                const existeProducto = listaProductos.some(p => p.ID_PRO === idPro);
+                if (!existeProducto) {
+                    document.getElementById('tituloModal').innerText = "Validación";
+                    document.getElementById('textoModal').innerText = `El producto seleccionado (${idPro}) no existe en el catálogo de productos (RN-23).`;
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
+            }
+
+            // Validación de existencia de planta (CU-28 / CU-29 / RN-23 / CU-11)
+            if (idPlanta) {
+                const existePlanta = listaPlantas.some(pl => pl.ID_PLANTA === idPlanta);
+                if (!existePlanta) {
+                    document.getElementById('tituloModal').innerText = "Validación";
+                    document.getElementById('textoModal').innerText = `La planta seleccionada (${idPlanta}) no existe en el catálogo de plantas (RN-23).`;
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
             }
 
             const datos = {

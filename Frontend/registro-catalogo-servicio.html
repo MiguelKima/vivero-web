@@ -5,11 +5,33 @@
     <title>Catálogo de Servicios - Vivero</title>
     <link rel="stylesheet" href="/style.css">
     
-    <!-- GUARDIÁN DE SEGURIDAD -->
+    <!-- GUARDIÁN DE SEGURIDAD Y CONTROL DE ACCESO (CU-6 / CU-14 / CU-18 / CU-40 / RN-34 / RN-35) -->
     <script>
-        if (!localStorage.getItem('usuarioLogueado')) {
-            window.location.replace('/'); 
+        function verificarSesion() {
+            if (!localStorage.getItem('usuarioLogueado')) {
+                window.location.replace('/'); 
+                return;
+            }
+            // Bloqueo de acceso para Empleados (CU-14 / CU-40 / RN-34 / RN-35: Actor exclusivo Administrador)
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                alert('Acceso no autorizado. Se requieren privilegios de Administrador para gestionar el catálogo de servicios (CU-14 / RN-34 / RN-35).');
+                window.location.replace('dashboard.html');
+                return;
+            }
         }
+        verificarSesion();
+        window.addEventListener('pageshow', function(event) {
+            verificarSesion();
+        });
+        document.addEventListener('DOMContentLoaded', function() {
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.querySelectorAll('nav a[href="registro-empleado.html"], nav a[href="registro-usuario.html"], nav a[href="registro-catalogo-servicio.html"]').forEach(el => el.style.display = 'none');
+            }
+        });
     </script>
 </head>
 <body>
@@ -36,15 +58,15 @@
             <form onsubmit="guardarCatalogo(event)">
                 <div class="form-group">
                     <label>Nombre del Servicio:</label>
-                    <input type="text" id="nom_serv" required placeholder="Ej. Mantenimiento de áreas verdes">
+                    <input type="text" id="nom_serv" required pattern=".*\S+.*" title="El nombre del servicio no puede estar vacío ni compuesto solo por espacios." placeholder="Ej. Mantenimiento de áreas verdes">
                 </div>
                 <div class="form-group">
-                    <label>Descripción:</label>
-                    <input type="text" id="desc_serv" required placeholder="Ej. Poda, riego y fertilización general">
+                    <label>Descripción (Opcional):</label>
+                    <input type="text" id="desc_serv" placeholder="Ej. Poda, riego y fertilización general (Opcional)">
                 </div>
                 <div class="form-group">
                     <label>Costo Estándar ($):</label>
-                    <input type="number" id="costo_est" step="0.01" required placeholder="0.00">
+                    <input type="number" id="costo_est" step="0.01" min="0" value="0" placeholder="0.00">
                 </div>
                 <button type="submit">Guardar en Catálogo</button>
             </form>
@@ -63,36 +85,109 @@
     <script>
         let esExito = false;
 
+        // Detección de inyecciones SQL y etiquetas HTML (V-01 / V-07)
+        function contieneSqlOHtml(valor) {
+            if (!valor || typeof valor !== 'string') return false;
+            const regexSql = /(\b(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|EXEC(UTE)?|UNION|MERGE|GRANT|REVOKE)\b|--|\/\*|\*\/|;|\bOR\b\s+['"\d\w]+=\s*['"\d\w]+|\bAND\b\s+['"\d\w]+=\s*['"\d\w]+)/i;
+            const regexHtml = /(<[^>]*>|<\s*script\b|javascript:|on\w+\s*=|style\s*=|iframe|object|embed|[<>])/i;
+            return regexSql.test(valor) || regexHtml.test(valor);
+        }
+
         function guardarCatalogo(event) {
             event.preventDefault();
+
+            const nomServRaw = document.getElementById('nom_serv').value;
+            const nom_serv = (nomServRaw || '').trim();
+            const descServRaw = document.getElementById('desc_serv').value;
+            const desc_serv = (descServRaw || '').trim();
+            const costoEstRaw = document.getElementById('costo_est').value;
+
+            // Validación de campo obligatorio con trim() (CU-38 / RN-12: NOM_SERV NOT NULL)
+            if (!nom_serv) {
+                document.getElementById('tituloModal').innerText = "Aviso";
+                document.getElementById('textoModal').innerText = "El nombre del servicio es obligatorio y no puede estar vacío ni contener solo espacios (RN-12).";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            // Validación contra inyección SQL y etiquetas HTML (V-01 / V-07)
+            if (contieneSqlOHtml(nom_serv)) {
+                document.getElementById('tituloModal').innerText = "Validación de Seguridad";
+                document.getElementById('textoModal').innerText = "El nombre del servicio contiene caracteres o instrucciones no permitidas (V-01 / V-07).";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            if (desc_serv && contieneSqlOHtml(desc_serv)) {
+                document.getElementById('tituloModal').innerText = "Validación de Seguridad";
+                document.getElementById('textoModal').innerText = "La descripción contiene instrucciones SQL o etiquetas HTML no permitidas (V-01 / V-07).";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            // Validación de costo no negativo (CU-39 / RN-16: El costo no acepta valores negativos; RN-33: por defecto 0)
+            let costo_est = 0;
+            if (costoEstRaw !== '' && costoEstRaw !== null && costoEstRaw !== undefined) {
+                const parsedCosto = parseFloat(costoEstRaw);
+                if (isNaN(parsedCosto) || parsedCosto < 0) {
+                    document.getElementById('tituloModal').innerText = "Aviso";
+                    document.getElementById('textoModal').innerText = "El costo estándar no acepta valores negativos, debe ser mayor o igual a 0 (RN-16).";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
+                costo_est = parsedCosto;
+            }
+
+            const usuarioActual = localStorage.getItem('usuarioLogueado') || '';
+            const rolActual = localStorage.getItem('rolUsuario') || '';
+            const esAdmin = rolActual && (rolActual.toLowerCase() === 'admin' || rolActual.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.getElementById('tituloModal').innerText = "Acceso Denegado";
+                document.getElementById('textoModal').innerText = "Acceso no autorizado. Se requieren privilegios de Administrador para registrar servicios en el catálogo (CU-14 / RN-34 / RN-35).";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
             const datos = {
-                nom_serv: document.getElementById('nom_serv').value,
-                desc_serv: document.getElementById('desc_serv').value,
-                costo_est: document.getElementById('costo_est').value
+                nom_serv,
+                desc_serv: desc_serv || '',
+                costo_est,
+                rolUsuario: rolActual,
+                usuarioLogueado: usuarioActual
             };
 
             fetch('/api/catalogo-servicios', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'x-rol-usuario': rolActual,
+                    'x-usuario': usuarioActual
+                },
                 body: JSON.stringify(datos)
             })
             .then(async res => {
-                const data = await res.json();
+                let data;
+                try {
+                    data = await res.json();
+                } catch (e) {
+                    data = { exito: false, error: 'Respuesta inválida del servidor.' };
+                }
+
                 if(res.ok && data.exito) {
                     esExito = true;
                     document.getElementById('tituloModal').innerText = "Registro Exitoso";
                     document.getElementById('textoModal').innerText = data.mensaje;
                 } else {
                     esExito = false;
-                    document.getElementById('tituloModal').innerText = "Aviso";
+                    document.getElementById('tituloModal').innerText = "Error de Validación";
                     document.getElementById('textoModal').innerText = data.error || "No se pudo registrar el servicio.";
                 }
                 document.getElementById('modalMensaje').style.display = 'flex';
             })
             .catch(err => {
                 esExito = false;
-                document.getElementById('tituloModal').innerText = "Error de Servidor";
-                document.getElementById('textoModal').innerText = "Error de comunicación con la base de datos.";
+                document.getElementById('tituloModal').innerText = "Error";
+                document.getElementById('textoModal').innerText = "Error de comunicación con el servidor.";
                 document.getElementById('modalMensaje').style.display = 'flex';
             });
         }

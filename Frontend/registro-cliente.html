@@ -5,11 +5,30 @@
     <title>Registro de Clientes - Vivero</title>
     <link rel="stylesheet" href="/style.css">
     
-    <!-- GUARDIÁN DE SEGURIDAD -->
+    <!-- GUARDIÁN DE SEGURIDAD Y CONTROL DE ACCESO (CU-6 / CU-18 / RN-34 / RN-35) -->
     <script>
-        if (!localStorage.getItem('usuarioLogueado')) {
-            window.location.replace('/'); 
+        function verificarSesion() {
+            if (!localStorage.getItem('usuarioLogueado')) {
+                window.location.replace('/'); 
+                return;
+            }
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.documentElement.classList.add('rol-empleado');
+            }
         }
+        verificarSesion();
+        window.addEventListener('pageshow', function(event) {
+            verificarSesion();
+        });
+        document.addEventListener('DOMContentLoaded', function() {
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.querySelectorAll('nav a[href="registro-empleado.html"], nav a[href="registro-usuario.html"], nav a[href="registro-catalogo-servicio.html"]').forEach(el => el.style.display = 'none');
+            }
+        });
     </script>
 
     <style>
@@ -109,6 +128,24 @@
         let esExito = false;
         const dominiosComunes = ["@gmail.com", "@hotmail.com", "@outlook.com", "@yahoo.com", "@icloud.com", "@live.com"];
 
+        // Sanitización de entradas contra inyecciones SQL y etiquetas HTML (CU-52 / V-01 / V-07)
+        function sanitizarSqlYHtml(valor) {
+            if (valor === undefined || valor === null) return '';
+            let limpio = String(valor).trim();
+            limpio = limpio.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+            limpio = limpio.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+            limpio = limpio.replace(/<[^>]+>/g, '');
+            limpio = limpio.replace(/javascript\s*:/gi, '');
+            limpio = limpio.replace(/on\w+\s*=/gi, '');
+            limpio = limpio.replace(/</g, '').replace(/>/g, '');
+            limpio = limpio.replace(/--+/g, '');
+            limpio = limpio.replace(/\/\*[\s\S]*?\*\//g, '');
+            limpio = limpio.replace(/;/g, '');
+            limpio = limpio.replace(/\b(DROP|TRUNCATE|ALTER|EXEC(UTE)?)\s+(TABLE|DATABASE|PROC(EDURE)?|VIEW)(\s+[a-zA-Z0-9_#]+)?\b/gi, '');
+            limpio = limpio.replace(/'\s*(OR|AND)\s*['\d\w]+\s*=\s*['\d\w]+/gi, '');
+            return limpio.trim();
+        }
+
         function manejarInputCorreo(input) {
             const valor = input.value;
             const cajaSugerencias = document.getElementById('sugerenciasCorreo');
@@ -118,9 +155,11 @@
                 const usuario = partes[0];
                 const dominioEscrito = partes[1].toLowerCase();
 
-                const filtrados = dominiosComunes.filter(d => d.substring(1).startsWith(dominioEscrito));
+                const filtrados = dominioEscrito === '' 
+                    ? dominiosComunes 
+                    : dominiosComunes.filter(d => d.substring(1).startsWith(dominioEscrito));
 
-                if (filtrados.length > 0 && dominioEscrito !== '') {
+                if (filtrados.length > 0) {
                     cajaSugerencias.innerHTML = '';
                     filtrados.forEach(dom => {
                         const item = document.createElement('div');
@@ -162,13 +201,45 @@
 
         function guardarCliente(event) {
             event.preventDefault();
+            const nom_cli = document.getElementById('nom_cli').value.trim();
+            const cor_cli = document.getElementById('cor_cli').value.trim();
+
+            if (!nom_cli) {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "El nombre del cliente es obligatorio y no puede estar vacío ni contener solo espacios.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            // Validación de formato de correo y dominio después del @ (CU-11 / CU-12 / RN-18 / CU-05 FA-02)
+            if (cor_cli) {
+                const partesCorreo = cor_cli.split('@');
+                if (partesCorreo.length !== 2 || !partesCorreo[1] || !partesCorreo[1].trim()) {
+                    esExito = false;
+                    document.getElementById('tituloModal').innerText = "Correo Inválido";
+                    document.getElementById('textoModal').innerText = "El correo electrónico debe incluir un dominio después del '@' (ejemplo: usuario@dominio.com).";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
+
+                const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+                if (!emailRegex.test(cor_cli)) {
+                    esExito = false;
+                    document.getElementById('tituloModal').innerText = "Formato Inválido";
+                    document.getElementById('textoModal').innerText = "El correo electrónico no cumple con un formato válido con dominio (ejemplo: usuario@dominio.com).";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
+            }
+
             const datos = {
-                nom_cli: document.getElementById('nom_cli').value,
-                dir_cli: document.getElementById('dir_cli').value,
-                tel_cli: document.getElementById('tel_cli').value,
-                cor_cli: document.getElementById('cor_cli').value,
-                com_cli: document.getElementById('com_cli').value,
-                pref_cli: document.getElementById('pref_cli').value
+                nom_cli: nom_cli,
+                dir_cli: sanitizarSqlYHtml(document.getElementById('dir_cli').value.trim()),
+                tel_cli: document.getElementById('tel_cli').value.trim(),
+                cor_cli: cor_cli,
+                com_cli: sanitizarSqlYHtml(document.getElementById('com_cli').value.trim()),
+                pref_cli: sanitizarSqlYHtml(document.getElementById('pref_cli').value.trim())
             };
 
             fetch('/api/clientes', {
@@ -184,7 +255,7 @@
                     document.getElementById('textoModal').innerText = data.mensaje;
                 } else {
                     esExito = false;
-                    document.getElementById('tituloModal').innerText = "Aviso de Duplicidad";
+                    document.getElementById('tituloModal').innerText = "Aviso";
                     document.getElementById('textoModal').innerText = data.error || "Este cliente ya se encuentra registrado.";
                 }
                 document.getElementById('modalMensaje').style.display = 'flex';

@@ -5,11 +5,30 @@
     <title>Registro de Ventas - Vivero</title>
     <link rel="stylesheet" href="/style.css">
     
-    <!-- GUARDIÁN DE SEGURIDAD -->
+    <!-- GUARDIÁN DE SEGURIDAD Y CONTROL DE ACCESO (CU-6 / CU-18 / RN-34 / RN-35) -->
     <script>
-        if (!localStorage.getItem('usuarioLogueado')) {
-            window.location.replace('/'); 
+        function verificarSesion() {
+            if (!localStorage.getItem('usuarioLogueado')) {
+                window.location.replace('/'); 
+                return;
+            }
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.documentElement.classList.add('rol-empleado');
+            }
         }
+        verificarSesion();
+        window.addEventListener('pageshow', function(event) {
+            verificarSesion();
+        });
+        document.addEventListener('DOMContentLoaded', function() {
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.querySelectorAll('nav a[href="registro-empleado.html"], nav a[href="registro-usuario.html"], nav a[href="registro-catalogo-servicio.html"]').forEach(el => el.style.display = 'none');
+            }
+        });
     </script>
 
     <style>
@@ -111,10 +130,10 @@
 
                 <div class="form-group">
                     <label>Saldo Pendiente / Cambio ($):</label>
-                    <input type="number" id="saldo" step="0.01" value="0" required>
+                    <input type="number" id="saldo" step="0.01" min="0" value="0" required>
                 </div>
 
-                <button type="submit">Procesar Venta</button>
+                <button type="submit" id="btnProcesarVenta">Procesar Venta</button>
             </form>
         </div>
 
@@ -143,6 +162,7 @@
         let listaProductos = [];
         let listaPlantas = [];
         let ventasGlobales = [];
+        let procesandoVenta = false;
 
         window.onload = function() {
             fetch('/api/clientes')
@@ -290,6 +310,11 @@
 
         function realizarVenta(event) {
             event.preventDefault();
+
+            // Evitar envíos múltiples o simultáneos (CU-31 / CU-12)
+            if (procesandoVenta) {
+                return;
+            }
             
             const id_cliente = document.getElementById('id_cliente').value;
             const id_producto = document.getElementById('id_producto').value;
@@ -301,16 +326,47 @@
             const saldo = parseFloat(document.getElementById('saldo').value) || 0;
             const cajero = localStorage.getItem('usuarioLogueado') || 'Administrador';
 
+            if (!id_cliente) {
+                alert("Debe seleccionar un cliente.");
+                return;
+            }
+
             if (!id_producto && !id_planta) {
                 alert("Debe seleccionar al menos un producto o una planta.");
                 return;
             }
 
-            const datos = { id_cliente, id_producto, cant_producto, id_planta, cant_planta, forma_pago, total, saldo, cajero };
+            // Validación RN-29: El saldo pendiente nunca puede ser mayor que el total
+            if (saldo > total) {
+                alert("El saldo pendiente no puede exceder el total de la venta (RN-29).");
+                return;
+            }
+
+            if (saldo < 0) {
+                alert("El saldo pendiente no puede ser negativo (RN-16).");
+                return;
+            }
+
+            // Bloquear doble clic y deshabilitar botón al primer clic (CU-31 / CU-12)
+            procesandoVenta = true;
+            const btnProcesar = document.getElementById('btnProcesarVenta');
+            if (btnProcesar) {
+                btnProcesar.disabled = true;
+                btnProcesar.dataset.originalText = btnProcesar.innerText;
+                btnProcesar.innerText = "Procesando...";
+                btnProcesar.style.opacity = "0.7";
+                btnProcesar.style.cursor = "not-allowed";
+            }
+
+            const tokenTransaccion = 'TX-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8);
+            const datos = { id_cliente, id_producto, cant_producto, id_planta, cant_planta, forma_pago, total, saldo, cajero, idempotency_key: tokenTransaccion };
 
             fetch('/api/ventas', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Idempotency-Key': tokenTransaccion
+                },
                 body: JSON.stringify(datos)
             })
             .then(res => res.json())
@@ -329,7 +385,17 @@
                     alert(data.error || "Error al procesar la venta.");
                 }
             })
-            .catch(err => alert("Error de comunicación con el servidor."));
+            .catch(err => alert("Error de comunicación con el servidor."))
+            .finally(() => {
+                // Re-habilitar botón al finalizar la operación (CU-31 / CU-12)
+                procesandoVenta = false;
+                if (btnProcesar) {
+                    btnProcesar.disabled = false;
+                    btnProcesar.innerText = btnProcesar.dataset.originalText || "Procesar Venta";
+                    btnProcesar.style.opacity = "1";
+                    btnProcesar.style.cursor = "pointer";
+                }
+            });
         }
 
         function cerrarModal() {

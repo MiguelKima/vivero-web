@@ -5,11 +5,30 @@
     <title>Registro de Productos - Vivero</title>
     <link rel="stylesheet" href="/style.css">
     
-    <!-- GUARDIÁN DE SEGURIDAD -->
+    <!-- GUARDIÁN DE SEGURIDAD Y CONTROL DE ACCESO (CU-6 / CU-18 / RN-34 / RN-35) -->
     <script>
-        if (!localStorage.getItem('usuarioLogueado')) {
-            window.location.replace('/'); 
+        function verificarSesion() {
+            if (!localStorage.getItem('usuarioLogueado')) {
+                window.location.replace('/'); 
+                return;
+            }
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.documentElement.classList.add('rol-empleado');
+            }
         }
+        verificarSesion();
+        window.addEventListener('pageshow', function(event) {
+            verificarSesion();
+        });
+        document.addEventListener('DOMContentLoaded', function() {
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.querySelectorAll('nav a[href="registro-empleado.html"], nav a[href="registro-usuario.html"], nav a[href="registro-catalogo-servicio.html"]').forEach(el => el.style.display = 'none');
+            }
+        });
     </script>
 </head>
 <body>
@@ -35,20 +54,20 @@
             <h2>Alta de Nuevo Producto</h2>
             <form onsubmit="guardarProducto(event)">
                 <div class="form-group">
-                    <label>Tipo de Producto:</label>
-                    <input type="text" id="tip_pro" required placeholder="Ej. Abono / Herramienta">
+                    <label>Tipo de Producto (Opcional):</label>
+                    <input type="text" id="tip_pro" placeholder="Ej. Abono / Herramienta">
                 </div>
                 <div class="form-group">
                     <label>Descripción del Producto:</label>
                     <input type="text" id="desc_pro" required placeholder="Ej. Tierra de hoja 5kg">
                 </div>
                 <div class="form-group">
-                    <label>Stock en Inventario:</label>
-                    <input type="number" id="stock_pro" required placeholder="50">
+                    <label>Stock en Inventario (Opcional, por defecto 0):</label>
+                    <input type="number" id="stock_pro" min="0" step="1" placeholder="0">
                 </div>
                 <div class="form-group">
-                    <label>Precio Unitario ($):</label>
-                    <input type="number" id="prec_pro" step="0.01" required placeholder="120.00">
+                    <label>Precio Unitario ($) (Opcional, por defecto 0.00):</label>
+                    <input type="number" id="prec_pro" step="0.01" min="0" placeholder="0.00">
                 </div>
                 <div class="form-group">
                     <label>Proveedor:</label>
@@ -84,12 +103,64 @@
 
         function guardarProducto(event) {
             event.preventDefault();
+            const desc_pro = document.getElementById('desc_pro').value.trim();
+            const id_prov = document.getElementById('id_prov').value;
+
+            // Validación con trim(): Solo descripción y proveedor son obligatorios (CU-19 / CU-20 / RN-31 / CU-08 FA-03)
+            if (!desc_pro) {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "La descripción del producto es obligatoria y no puede estar vacía ni contener solo espacios.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            if (!id_prov) {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "Debe seleccionar un proveedor válido.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            const stockVal = document.getElementById('stock_pro').value;
+            const precVal = document.getElementById('prec_pro').value;
+
+            // Validación de precio no negativo (CU-21 / RN-16 / CU-08 FA-02)
+            let precioFinal = 0;
+            if (precVal !== '') {
+                const precioNum = parseFloat(precVal);
+                if (isNaN(precioNum) || precioNum < 0) {
+                    esExito = false;
+                    document.getElementById('tituloModal').innerText = "Validación";
+                    document.getElementById('textoModal').innerText = "El precio del producto debe ser mayor o igual a 0 y no puede ser negativo.";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
+                precioFinal = precioNum;
+            }
+
+            // Validación de stock entero mayor o igual a 0 (CU-22 / RN-17 / RN-31)
+            let stockFinal = 0;
+            if (stockVal !== '') {
+                const stockNum = Number(stockVal);
+                if (isNaN(stockNum) || !Number.isInteger(stockNum) || stockNum < 0) {
+                    esExito = false;
+                    document.getElementById('tituloModal').innerText = "Validación";
+                    document.getElementById('textoModal').innerText = "El stock del producto debe ser un número entero mayor o igual a 0.";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
+                stockFinal = stockNum;
+            }
+
+            // Stock y precio por defecto 0 si no se ingresan, tipo opcional
             const datos = {
-                tip_pro: document.getElementById('tip_pro').value,
-                desc_pro: document.getElementById('desc_pro').value,
-                stock_pro: document.getElementById('stock_pro').value,
-                prec_pro: document.getElementById('prec_pro').value,
-                id_prov: document.getElementById('id_prov').value
+                tip_pro: document.getElementById('tip_pro').value.trim() || '',
+                desc_pro: desc_pro,
+                stock_pro: stockFinal,
+                prec_pro: precioFinal,
+                id_prov: id_prov
             };
 
             fetch('/api/productos', {
@@ -105,7 +176,7 @@
                     document.getElementById('textoModal').innerText = data.mensaje;
                 } else {
                     esExito = false;
-                    document.getElementById('tituloModal').innerText = "Aviso de Duplicidad";
+                    document.getElementById('tituloModal').innerText = "Aviso del Sistema";
                     document.getElementById('textoModal').innerText = data.error || "Este producto ya existe en el inventario.";
                 }
                 document.getElementById('modalMensaje').style.display = 'flex';

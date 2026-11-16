@@ -41,6 +41,14 @@ nav a:hover {
     text-decoration: underline;
 }
 
+/* Ocultar módulos restringidos al rol Empleado (CU-18 / CU-40 / RN-34 / RN-35) */
+.rol-empleado nav a[href="registro-empleado.html"],
+.rol-empleado nav a[href="registro-usuario.html"],
+.rol-empleado nav a[href="registro-catalogo-servicio.html"],
+.rol-empleado a[href="registro-catalogo-servicio.html"] {
+    display: none !important;
+}
+
 .container {
     max-width: 1200px;
     margin: 30px auto;

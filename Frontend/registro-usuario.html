@@ -4,6 +4,34 @@
     <meta charset="UTF-8">
     <title>Gestión de Usuarios - Vivero</title>
     <link rel="stylesheet" href="/style.css">
+    
+    <!-- GUARDIÁN DE SEGURIDAD Y PERMISOS (CU-6 / CU-18 / RN-34 / RN-35) -->
+    <script>
+        function verificarSesion() {
+            if (!localStorage.getItem('usuarioLogueado')) {
+                window.location.replace('/'); 
+                return;
+            }
+            // Bloqueo de acceso para Empleados (CU-18 / RN-34 / RN-35)
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                alert('Acceso no autorizado. Se requieren privilegios de Administrador para gestionar usuarios.');
+                window.location.replace('dashboard.html');
+            }
+        }
+        verificarSesion();
+        window.addEventListener('pageshow', function(event) {
+            verificarSesion();
+        });
+        document.addEventListener('DOMContentLoaded', function() {
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.querySelectorAll('nav a[href="registro-empleado.html"], nav a[href="registro-usuario.html"], nav a[href="registro-catalogo-servicio.html"]').forEach(el => el.style.display = 'none');
+            }
+        });
+    </script>
 </head>
 <body>
     <header>
@@ -29,8 +57,8 @@
             <h2>Alta de Nuevo Usuario del Sistema</h2>
             <form onsubmit="guardarUsuario(event)">
                 <div class="form-group">
-                    <label>Nombre de Usuario:</label>
-                    <input type="text" id="username" required placeholder="Ej. jperez">
+                    <label>Nombre de Usuario (Máx. 80 caracteres):</label>
+                    <input type="text" id="username" required maxlength="80" placeholder="Ej. jperez">
                 </div>
                 <div class="form-group">
                     <label>Contraseña:</label>
@@ -45,9 +73,9 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>Empleado Asociado:</label>
-                    <select id="id_emp" required>
-                        <option value="">Seleccione un empleado</option>
+                    <label>Empleado Asociado (Opcional):</label>
+                    <select id="id_emp">
+                        <option value="">Ninguno / Sin empleado asociado</option>
                     </select>
                 </div>
                 <button type="submit">Registrar Usuario</button>
@@ -72,6 +100,41 @@
         </div>
     </div>
 
+    <!-- Modal de Edición de Usuario (CU-16 / CU-51 / RN-13 / CP-13) -->
+    <div id="modalEditarUsuario" class="custom-modal" style="display: none;">
+        <div class="custom-modal-content" style="max-width: 450px; text-align: left;">
+            <h3 style="color: var(--primary-color); border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-top: 0;">Editar Información de Usuario</h3>
+            <form onsubmit="guardarEdicionUsuario(event)">
+                <input type="hidden" id="edit_id_usuario">
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label style="display: block; font-weight: 600; margin-bottom: 5px;">ID Usuario:</label>
+                    <input type="text" id="edit_id_display" disabled style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; background: #e9ecef;">
+                </div>
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label style="display: block; font-weight: 600; margin-bottom: 5px;">Nombre de Usuario (Máx. 80 caracteres):</label>
+                    <input type="text" id="edit_username" required maxlength="80" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                </div>
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label style="display: block; font-weight: 600; margin-bottom: 5px;">Rol del Sistema:</label>
+                    <select id="edit_rol" required style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                        <option value="Administrador">Administrador</option>
+                        <option value="Empleado">Empleado</option>
+                    </select>
+                </div>
+                <div class="form-group" style="margin-bottom: 20px;">
+                    <label style="display: block; font-weight: 600; margin-bottom: 5px;">Empleado Asociado (Opcional):</label>
+                    <select id="edit_id_emp" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                        <option value="">Ninguno / Sin empleado asociado</option>
+                    </select>
+                </div>
+                <div style="display: flex; gap: 10px;">
+                    <button type="submit" style="background-color: var(--primary-color); color: white; padding: 10px; border: none; border-radius: 4px; cursor: pointer; flex: 1; font-weight: bold;">Guardar Cambios</button>
+                    <button type="button" onclick="cerrarEditarUsuario()" style="background-color: #6c757d; color: white; padding: 10px; border: none; border-radius: 4px; cursor: pointer; flex: 1;">Cancelar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
         let esExito = false;
 
@@ -91,10 +154,10 @@
                 .then(res => res.json())
                 .then(data => {
                     const sel = document.getElementById('id_emp');
-                    sel.innerHTML = '<option value="">Seleccione un empleado</option>';
+                    sel.innerHTML = '<option value="">Ninguno / Sin empleado asociado</option>';
                     if(data && data.length > 0) {
                         data.forEach(e => {
-                            sel.innerHTML += `<option value="${e.ID_EMP}">${e.NOM_EMP} (${e.PUE_EMP})</option>`;
+                            sel.innerHTML += `<option value="${e.ID_EMP}">${e.NOM_EMP} (${e.PUE_EMP || 'Sin puesto'})</option>`;
                         });
                     }
                 })
@@ -140,8 +203,11 @@
                                 <td style="padding: 10px;">${u.ROL}</td>
                                 <td style="padding: 10px;">${u.ID_EMP || 'N/A'}</td>
                                 <td style="padding: 10px; ${colorEstado}">${u.ESTADO || 'Activo'}</td>
-                                <td style="padding: 10px; text-align: center;">
-                                    <button onclick="cambiarEstado('${u.ID_USUARIO}', '${nuevoEstado}')" style="background-color: ${colorBoton}; padding: 6px 12px; font-size: 13px;">
+                                <td style="padding: 10px; text-align: center; display: flex; gap: 6px; justify-content: center;">
+                                    <button onclick="abrirEditarUsuario('${u.ID_USUARIO}', '${u.USERNAME}', '${u.ROL}', '${u.ID_EMP || ''}')" style="background-color: #ffc107; color: #000; padding: 6px 12px; font-size: 13px; font-weight: bold; border: none; border-radius: 4px; cursor: pointer;">
+                                        Editar
+                                    </button>
+                                    <button onclick="cambiarEstado('${u.ID_USUARIO}', '${nuevoEstado}')" style="background-color: ${colorBoton}; padding: 6px 12px; font-size: 13px; border: none; border-radius: 4px; cursor: pointer;">
                                         ${textoBoton}
                                     </button>
                                 </td>
@@ -160,8 +226,12 @@
         function cambiarEstado(idUsuario, nuevoEstado) {
             fetch(`/api/usuarios/${idUsuario}/estado`, {
                 method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ estado: nuevoEstado })
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'x-rol-usuario': localStorage.getItem('rolUsuario') || '',
+                    'x-usuario': localStorage.getItem('usuarioLogueado') || ''
+                },
+                body: JSON.stringify({ estado: nuevoEstado, rol_solicitante: localStorage.getItem('rolUsuario') || '' })
             })
             .then(res => res.json())
             .then(data => {
@@ -176,16 +246,60 @@
 
         function guardarUsuario(event) {
             event.preventDefault();
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+            const rol = document.getElementById('rol').value;
+            const idEmpVal = document.getElementById('id_emp').value;
+
+            if (!username) {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "El nombre de usuario es obligatorio.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            // Validación de longitud máxima (RN-19: USERNAME VARCHAR(80))
+            if (username.length > 80) {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "El nombre de usuario no puede exceder los 80 caracteres.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            if (!password) {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "La contraseña es obligatoria.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            if (!rol) {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "El rol del sistema es obligatorio.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
             const datos = {
-                username: document.getElementById('username').value.trim(),
-                password: document.getElementById('password').value,
-                rol: document.getElementById('rol').value,
-                id_emp: document.getElementById('id_emp').value
+                username: username,
+                password: password,
+                rol: rol,
+                id_emp: idEmpVal && idEmpVal.trim() ? idEmpVal.trim() : null,
+                rol_solicitante: localStorage.getItem('rolUsuario') || '',
+                usuarioLogueado: localStorage.getItem('usuarioLogueado') || ''
             };
 
             fetch('/api/usuarios', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'x-rol-usuario': localStorage.getItem('rolUsuario') || '',
+                    'x-usuario': localStorage.getItem('usuarioLogueado') || ''
+                },
                 body: JSON.stringify(datos)
             })
             .then(async res => {
@@ -196,8 +310,11 @@
                     document.getElementById('textoModal').innerText = data.mensaje;
                 } else {
                     esExito = false;
-                    document.getElementById('tituloModal').innerText = "Aviso";
-                    document.getElementById('textoModal').innerText = data.error || "No se pudo registrar el usuario.";
+                    const mensajeError = data.error || "No se pudo registrar el usuario.";
+                    const esErrorUnique = mensajeError.toUpperCase().includes('UNIQUE');
+                    document.getElementById('tituloModal').innerText = esErrorUnique ? "Error UNIQUE (RN-13 / CP-13)" : "Aviso";
+                    document.getElementById('textoModal').innerText = mensajeError;
+                    alert(mensajeError);
                 }
                 document.getElementById('modalMensaje').style.display = 'flex';
             })
@@ -207,6 +324,83 @@
                 document.getElementById('textoModal').innerText = "Error de comunicación con la base de datos.";
                 document.getElementById('modalMensaje').style.display = 'flex';
             });
+        }
+
+        function abrirEditarUsuario(idUsuario, username, rol, idEmp) {
+            document.getElementById('edit_id_usuario').value = idUsuario;
+            document.getElementById('edit_id_display').value = idUsuario;
+            document.getElementById('edit_username').value = username;
+            document.getElementById('edit_rol').value = rol;
+
+            const origSelect = document.getElementById('id_emp');
+            const editSelect = document.getElementById('edit_id_emp');
+            editSelect.innerHTML = origSelect.innerHTML;
+            editSelect.value = idEmp || '';
+
+            document.getElementById('modalEditarUsuario').style.display = 'flex';
+        }
+
+        function cerrarEditarUsuario() {
+            document.getElementById('modalEditarUsuario').style.display = 'none';
+        }
+
+        function guardarEdicionUsuario(event) {
+            event.preventDefault();
+            const idUsuario = document.getElementById('edit_id_usuario').value;
+            const nuevoUsername = document.getElementById('edit_username').value.trim();
+            const nuevoRol = document.getElementById('edit_rol').value;
+            const nuevoIdEmp = document.getElementById('edit_id_emp').value;
+
+            if (!nuevoUsername) {
+                mostrarAviso("Validación", "El nombre de usuario no puede estar vacío.", false);
+                return;
+            }
+
+            if (nuevoUsername.length > 80) {
+                mostrarAviso("Validación", "El nombre de usuario no puede exceder los 80 caracteres (RN-19).", false);
+                return;
+            }
+
+            const payload = {
+                username: nuevoUsername,
+                rol: nuevoRol,
+                id_emp: nuevoIdEmp && nuevoIdEmp.trim() ? nuevoIdEmp.trim() : null,
+                rol_solicitante: localStorage.getItem('rolUsuario') || '',
+                usuarioLogueado: localStorage.getItem('usuarioLogueado') || ''
+            };
+
+            fetch(`/api/usuarios/${encodeURIComponent(idUsuario)}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-rol-usuario': localStorage.getItem('rolUsuario') || '',
+                    'x-usuario': localStorage.getItem('usuarioLogueado') || ''
+                },
+                body: JSON.stringify(payload)
+            })
+            .then(async res => {
+                const data = await res.json();
+                if (res.ok && data.exito) {
+                    cerrarEditarUsuario();
+                    mostrarAviso("Edición Exitosa", data.mensaje || "Usuario actualizado correctamente.", false);
+                    cargarUsuariosSistema();
+                } else {
+                    const mensajeError = data.error || "No se pudo actualizar la información del usuario.";
+                    const esErrorUnique = mensajeError.toUpperCase().includes('UNIQUE');
+                    mostrarAviso(esErrorUnique ? "Error UNIQUE (RN-13 / CP-13)" : "Error al Modificar", mensajeError, false);
+                    alert(mensajeError);
+                }
+            })
+            .catch(err => {
+                mostrarAviso("Error de Servidor", "Error al conectar con el servidor: " + err.message, false);
+            });
+        }
+
+        function mostrarAviso(titulo, texto, recargar = false) {
+            esExito = recargar;
+            document.getElementById('tituloModal').innerText = titulo;
+            document.getElementById('textoModal').innerText = texto;
+            document.getElementById('modalMensaje').style.display = 'flex';
         }
 
         function cerrarModal() {

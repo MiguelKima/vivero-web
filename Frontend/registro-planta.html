@@ -5,11 +5,30 @@
     <title>Registro de Plantas - Vivero</title>
     <link rel="stylesheet" href="/style.css">
     
-    <!-- GUARDIÁN DE SEGURIDAD -->
+    <!-- GUARDIÁN DE SEGURIDAD Y CONTROL DE ACCESO (CU-6 / CU-18 / RN-34 / RN-35) -->
     <script>
-        if (!localStorage.getItem('usuarioLogueado')) {
-            window.location.replace('/'); 
+        function verificarSesion() {
+            if (!localStorage.getItem('usuarioLogueado')) {
+                window.location.replace('/'); 
+                return;
+            }
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.documentElement.classList.add('rol-empleado');
+            }
         }
+        verificarSesion();
+        window.addEventListener('pageshow', function(event) {
+            verificarSesion();
+        });
+        document.addEventListener('DOMContentLoaded', function() {
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.querySelectorAll('nav a[href="registro-empleado.html"], nav a[href="registro-usuario.html"], nav a[href="registro-catalogo-servicio.html"]').forEach(el => el.style.display = 'none');
+            }
+        });
     </script>
 </head>
 <body>
@@ -35,8 +54,8 @@
             <h2>Alta de Nueva Planta</h2>
             <form onsubmit="guardarPlanta(event)">
                 <div class="form-group">
-                    <label>Tipo de Planta:</label>
-                    <input type="text" id="tipo" required placeholder="Ej. Suculenta">
+                    <label>Tipo de Planta (Opcional):</label>
+                    <input type="text" id="tipo" placeholder="Ej. Suculenta">
                 </div>
                 <div class="form-group">
                     <label>Nombre Científico:</label>
@@ -44,19 +63,19 @@
                 </div>
                 <div class="form-group">
                     <label>Nombre Común:</label>
-                    <input type="text" id="comun" placeholder="Ej. Rosa de alabastro">
+                    <input type="text" id="comun" required placeholder="Ej. Rosa de alabastro">
                 </div>
                 <div class="form-group">
-                    <label>Tamaño (cm):</label>
-                    <input type="number" id="tamano" step="0.01" required placeholder="0.00">
+                    <label>Tamaño (cm) (Opcional):</label>
+                    <input type="number" id="tamano" step="0.01" placeholder="0.00">
                 </div>
                 <div class="form-group">
-                    <label>Stock Inicial:</label>
-                    <input type="number" id="stock" required placeholder="0">
+                    <label>Stock Inicial (Opcional, por defecto 0):</label>
+                    <input type="number" id="stock" min="0" step="1" placeholder="0">
                 </div>
                 <div class="form-group">
-                    <label>Precio Unitario ($):</label>
-                    <input type="number" id="precio" step="0.01" required placeholder="0.00">
+                    <label>Precio Unitario ($) (Opcional, por defecto 0.00):</label>
+                    <input type="number" id="precio" step="0.01" min="0" placeholder="0.00">
                 </div>
                 <div class="form-group">
                     <label>Proveedor:</label>
@@ -90,16 +109,104 @@
                 });
         };
 
+        function contieneSqlOHtml(valor) {
+            if (!valor || typeof valor !== 'string') return false;
+            const regexSql = /(\b(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|EXEC(UTE)?|UNION|MERGE|GRANT|REVOKE)\b|--|\/\*|\*\/|;|\bOR\b\s+['"\d\w]+=\s*['"\d\w]+|\bAND\b\s+['"\d\w]+=\s*['"\d\w]+)/i;
+            const regexHtml = /(<[^>]*>|<\s*script\b|javascript:|on\w+\s*=)/i;
+            return regexSql.test(valor) || regexHtml.test(valor);
+        }
+
         function guardarPlanta(event) {
             event.preventDefault();
+            const cientifico = document.getElementById('cientifico').value.trim();
+            const comun = document.getElementById('comun').value.trim();
+            const proveedor = document.getElementById('proveedor').value;
+
+            // Validación: Nombre científico, nombre común y proveedor obligatorios (CU-23 / RN-12)
+            if (!cientifico) {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "El nombre científico de la planta es obligatorio.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            // Detección y rechazo de SQL / HTML (CU-25 / V-01 / V-07)
+            if (contieneSqlOHtml(cientifico)) {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "El nombre científico contiene instrucciones SQL o etiquetas HTML no permitidas.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            if (!comun) {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "El nombre común de la planta es obligatorio.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            if (contieneSqlOHtml(comun)) {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "El nombre común contiene instrucciones SQL o etiquetas HTML no permitidas.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            if (!proveedor) {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "Debe seleccionar un proveedor válido.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            const stockVal = document.getElementById('stock').value;
+            const precioVal = document.getElementById('precio').value;
+            const tamanoVal = document.getElementById('tamano').value;
+
+            // Validación de stock entero mayor o igual a 0 (CU-24 / RN-17 / RN-31 / CP-12)
+            let stockFinal = 0;
+            if (stockVal !== '') {
+                const stockNum = Number(stockVal);
+                if (isNaN(stockNum) || !Number.isInteger(stockNum) || stockNum < 0) {
+                    esExito = false;
+                    document.getElementById('tituloModal').innerText = "Validación";
+                    document.getElementById('textoModal').innerText = "El stock de la planta debe ser un número entero mayor o igual a 0 (no se permiten valores negativos).";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
+                stockFinal = stockNum;
+            }
+
+            // Precio por defecto 0 si no se ingresa (RN-31 / RN-16)
+            let precioFinal = 0;
+            if (precioVal !== '') {
+                const precioNum = parseFloat(precioVal);
+                if (isNaN(precioNum) || precioNum < 0) {
+                    esExito = false;
+                    document.getElementById('tituloModal').innerText = "Validación";
+                    document.getElementById('textoModal').innerText = "El precio de la planta debe ser mayor o igual a 0 y no puede ser negativo.";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
+                precioFinal = precioNum;
+            }
+
+            const tamanoFinal = tamanoVal !== '' ? parseFloat(tamanoVal) : null;
+            const tipoFinal = document.getElementById('tipo').value.trim();
+
             const datos = {
-                tipo: document.getElementById('tipo').value,
-                cientifico: document.getElementById('cientifico').value,
-                comun: document.getElementById('comun').value,
-                tamano: document.getElementById('tamano').value,
-                stock: document.getElementById('stock').value,
-                precio: document.getElementById('precio').value,
-                proveedor: document.getElementById('proveedor').value
+                tipo: tipoFinal || '',
+                cientifico: cientifico,
+                comun: comun,
+                tamano: tamanoFinal,
+                stock: stockFinal,
+                precio: precioFinal,
+                proveedor: proveedor
             };
 
             fetch('/api/plantas', {
@@ -115,7 +222,7 @@
                     document.getElementById('textoModal').innerText = data.mensaje;
                 } else {
                     esExito = false;
-                    document.getElementById('tituloModal').innerText = "Aviso de Duplicidad";
+                    document.getElementById('tituloModal').innerText = "Aviso del Sistema";
                     document.getElementById('textoModal').innerText = data.error || "Esta planta ya se encuentra registrada.";
                 }
                 document.getElementById('modalMensaje').style.display = 'flex';

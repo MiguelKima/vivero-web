@@ -5,11 +5,30 @@
     <title>Registro de Proveedores - Vivero</title>
     <link rel="stylesheet" href="/style.css">
     
-    <!-- GUARDIÁN DE SEGURIDAD -->
+    <!-- GUARDIÁN DE SEGURIDAD Y CONTROL DE ACCESO (CU-6 / CU-18 / RN-34 / RN-35) -->
     <script>
-        if (!localStorage.getItem('usuarioLogueado')) {
-            window.location.replace('/'); 
+        function verificarSesion() {
+            if (!localStorage.getItem('usuarioLogueado')) {
+                window.location.replace('/'); 
+                return;
+            }
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.documentElement.classList.add('rol-empleado');
+            }
         }
+        verificarSesion();
+        window.addEventListener('pageshow', function(event) {
+            verificarSesion();
+        });
+        document.addEventListener('DOMContentLoaded', function() {
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.querySelectorAll('nav a[href="registro-empleado.html"], nav a[href="registro-usuario.html"], nav a[href="registro-catalogo-servicio.html"]').forEach(el => el.style.display = 'none');
+            }
+        });
     </script>
 </head>
 <body>
@@ -36,27 +55,27 @@
             <form onsubmit="guardarProveedor(event)">
                 <div class="form-group">
                     <label>Tipo de Suministro:</label>
-                    <input type="text" id="tip_sum" required placeholder="Ej. Fertilizantes, Herramientas...">
+                    <input type="text" id="tip_sum" placeholder="Ej. Fertilizantes, Herramientas...">
                 </div>
                 <div class="form-group">
                     <label>Nombre del Proveedor / Empresa:</label>
-                    <input type="text" id="nom_prov" required>
+                    <input type="text" id="nom_prov" required placeholder="Ej. Vivero del Norte">
                 </div>
                 <div class="form-group">
                     <label>RFC:</label>
-                    <input type="text" id="rfc_prov" required>
+                    <input type="text" id="rfc_prov" placeholder="Ej. VNO123456789">
                 </div>
                 <div class="form-group">
                     <label>Dirección:</label>
-                    <input type="text" id="dir_prov" required>
+                    <input type="text" id="dir_prov" placeholder="Ej. Av. Siempre Viva 123">
                 </div>
                 <div class="form-group">
                     <label>Contacto (Teléfono/Email):</label>
-                    <input type="text" id="con_prov" required>
+                    <input type="text" id="con_prov" placeholder="Ej. 5512345678">
                 </div>
                 <div class="form-group">
                     <label>Producto Principal que Provee:</label>
-                    <input type="text" id="pro_prov" required>
+                    <input type="text" id="pro_prov" placeholder="Ej. Plantas y macetas">
                 </div>
                 <button type="submit">Registrar Proveedor</button>
             </form>
@@ -76,13 +95,16 @@
 
         function guardarProveedor(event) {
             event.preventDefault();
+            const nom_prov = document.getElementById('nom_prov').value.trim();
+            if (!nom_prov) return;
+
             const datos = {
-                tip_sum: document.getElementById('tip_sum').value,
-                nom_prov: document.getElementById('nom_prov').value,
-                rfc_prov: document.getElementById('rfc_prov').value,
-                dir_prov: document.getElementById('dir_prov').value,
-                con_prov: document.getElementById('con_prov').value,
-                pro_prov: document.getElementById('pro_prov').value
+                tip_sum: document.getElementById('tip_sum').value.trim() || null,
+                nom_prov: nom_prov,
+                rfc_prov: document.getElementById('rfc_prov').value.trim() || null,
+                dir_prov: document.getElementById('dir_prov').value.trim() || null,
+                con_prov: document.getElementById('con_prov').value.trim() || null,
+                pro_prov: document.getElementById('pro_prov').value.trim() || null
             };
 
             fetch('/api/proveedores', {

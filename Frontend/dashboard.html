@@ -5,11 +5,30 @@
     <title>Panel de Control - Vivero</title>
     <link rel="stylesheet" href="/style.css">
     
-    <!-- GUARDIÁN DE SEGURIDAD -->
+    <!-- GUARDIÁN DE SEGURIDAD Y CONTROL DE ACCESO (CU-6 / CU-18 / RN-34 / RN-35) -->
     <script>
-        if (!localStorage.getItem('usuarioLogueado')) {
-            window.location.replace('/'); 
+        function verificarSesion() {
+            if (!localStorage.getItem('usuarioLogueado')) {
+                window.location.replace('/'); 
+                return;
+            }
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.documentElement.classList.add('rol-empleado');
+            }
         }
+        verificarSesion();
+        window.addEventListener('pageshow', function(event) {
+            verificarSesion();
+        });
+        document.addEventListener('DOMContentLoaded', function() {
+            const rol = localStorage.getItem('rolUsuario');
+            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
+            if (!esAdmin) {
+                document.querySelectorAll('nav a[href="registro-empleado.html"], nav a[href="registro-usuario.html"], nav a[href="registro-catalogo-servicio.html"]').forEach(el => el.style.display = 'none');
+            }
+        });
     </script>
 
     <style>
@@ -109,7 +128,7 @@
     <div id="modalEditor" class="custom-modal">
         <div class="custom-modal-content" style="max-width: 400px; text-align: left;">
             <h3 id="tituloEditor" style="color: var(--primary-color); border-bottom: 1px solid #ccc; padding-bottom: 10px;">Editar Registro</h3>
-            <form id="formEditor" onsubmit="guardarEdicion(event)">
+            <form id="formEditor" novalidate onsubmit="guardarEdicion(event)">
                 <input type="hidden" id="editTabla">
                 <input type="hidden" id="editIdCol">
                 <input type="hidden" id="editIdValue">
@@ -126,8 +145,51 @@
         </div>
     </div>
 
+    <!-- MODAL DE MENSAJES DEL SISTEMA (CU-11 / CU-12 / CU-47) -->
+    <div id="modalMensaje" class="custom-modal">
+        <div class="custom-modal-content">
+            <h3 id="tituloModal">Aviso del Sistema</h3>
+            <p id="textoModal">Mensaje informativo.</p>
+            <button onclick="cerrarModal()">Aceptar</button>
+        </div>
+    </div>
+
     <script>
         let isAdmin = false;
+        let listaProveedores = [];
+
+        // Función para escapar texto en HTML y prevenir XSS y rotura de atributos (V-07 / CU-52)
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        // Sanitización de entradas contra inyecciones SQL y etiquetas HTML (CU-52 / V-01 / V-07)
+        function sanitizarSqlYHtml(valor) {
+            if (valor === undefined || valor === null) return '';
+            let limpio = String(valor).trim();
+            // 1. Sanitización contra XSS y HTML (V-07):
+            limpio = limpio.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+            limpio = limpio.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+            limpio = limpio.replace(/<[^>]+>/g, '');
+            limpio = limpio.replace(/javascript\s*:/gi, '');
+            limpio = limpio.replace(/on\w+\s*=/gi, '');
+            limpio = limpio.replace(/</g, '').replace(/>/g, '');
+
+            // 2. Sanitización contra Inyección SQL (V-01):
+            limpio = limpio.replace(/--+/g, '');
+            limpio = limpio.replace(/\/\*[\s\S]*?\*\//g, '');
+            limpio = limpio.replace(/;/g, '');
+            limpio = limpio.replace(/\b(DROP|TRUNCATE|ALTER|EXEC(UTE)?)\s+(TABLE|DATABASE|PROC(EDURE)?|VIEW)(\s+[a-zA-Z0-9_#]+)?\b/gi, '');
+            limpio = limpio.replace(/'\s*(OR|AND)\s*['\d\w]+\s*=\s*['\d\w]+/gi, '');
+
+            return limpio.trim();
+        }
 
         window.onload = function() {
             const rol = localStorage.getItem('rolUsuario');
@@ -136,12 +198,19 @@
                 document.getElementById('seccionAdmin').style.display = 'block';
             }
 
+            fetch('/api/proveedores').then(res => res.json()).then(data => {
+                if (data && data.length > 0) listaProveedores = data;
+            }).catch(() => {});
+
             // Llamadas dinámicas: ID Tabla | Cabeceras Visuales | Columnas Reales de SQL | Data | Config del backend
             fetch('/api/plantas').then(res => res.json()).then(data => llenarTabla('tabla-plantas', ['ID', 'Científico', 'Stock'], ['ID_PLANTA', 'NOM_CTFO', 'STOCK_PLANT'], data, { tablaSQL: 'PLANTAS', idCol: 'ID_PLANTA' }));
-            fetch('/api/dashboard/productos').then(res => res.json()).then(data => llenarTabla('tabla-productos', ['ID', 'Descripción', 'Stock', 'Precio'], ['ID_PRO', 'DESC_PRO', 'STOCK_PRO', 'PREC_PRO'], data, { tablaSQL: 'PRODUCTOS', idCol: 'ID_PRO' }));
-            fetch('/api/dashboard/clientes').then(res => res.json()).then(data => llenarTabla('tabla-clientes', ['ID', 'Nombre', 'Teléfono'], ['ID_CLI', 'NOM_CLI', 'TEL_CLI'], data, { tablaSQL: 'CLIENTES', idCol: 'ID_CLI' }));
-            fetch('/api/dashboard/proveedores').then(res => res.json()).then(data => llenarTabla('tabla-proveedores', ['ID', 'Nombre', 'RFC'], ['ID_PROV', 'NOM_PROV', 'RFC_PROV'], data, { tablaSQL: 'PROVEEDORES', idCol: 'ID_PROV' }));
-            fetch('/api/dashboard/empleados').then(res => res.json()).then(data => llenarTabla('tabla-empleados', ['ID', 'Nombre', 'Puesto'], ['ID_EMP', 'NOM_EMP', 'PUE_EMP'], data, { tablaSQL: 'EMPLEADOS', idCol: 'ID_EMP' }));
+            fetch('/api/dashboard/productos').then(res => res.json()).then(data => llenarTabla('tabla-productos', ['ID', 'Descripción', 'Stock', 'Precio', 'Proveedor'], ['ID_PRO', 'DESC_PRO', 'STOCK_PRO', 'PREC_PRO', 'ID_PROV'], data, { tablaSQL: 'PRODUCTOS', idCol: 'ID_PRO' }));
+            fetch('/api/dashboard/clientes').then(res => res.json()).then(data => llenarTabla('tabla-clientes', ['ID', 'Nombre', 'Teléfono', 'Correo'], ['ID_CLI', 'NOM_CLI', 'TEL_CLI', 'COR_CLI'], data, { tablaSQL: 'CLIENTES', idCol: 'ID_CLI' }));
+            fetch('/api/dashboard/proveedores').then(res => res.json()).then(data => {
+                if (data && data.length > 0) listaProveedores = data;
+                llenarTabla('tabla-proveedores', ['ID', 'Nombre', 'RFC', 'Contacto/Correo'], ['ID_PROV', 'NOM_PROV', 'RFC_PROV', 'CON_PROV'], data, { tablaSQL: 'PROVEEDORES', idCol: 'ID_PROV' });
+            });
+            fetch('/api/dashboard/empleados').then(res => res.json()).then(data => llenarTabla('tabla-empleados', ['ID', 'Nombre', 'Puesto', 'Sueldo'], ['ID_EMP', 'NOM_EMP', 'PUE_EMP', 'SUE_EMP'], data, { tablaSQL: 'EMPLEADOS', idCol: 'ID_EMP' }));
             fetch('/api/dashboard/pedidos').then(res => res.json()).then(data => llenarTabla('tabla-pedidos', ['ID', 'Tipo', 'Cliente', 'Total'], ['ID_PED', 'TIP_PED', 'ID_CLI', 'TOT_PEDIDO'], data, { tablaSQL: 'PEDIDOS', idCol: 'ID_PED' }));
             fetch('/api/dashboard/ventas').then(res => res.json()).then(data => llenarTabla('tabla-ventas', ['ID Venta', 'Cliente', 'Pago', 'Total'], ['ID_VEN', 'ID_CLI', 'FORM_PAGO', 'TOT_PAGO'], data, { tablaSQL: 'VENTAS', idCol: 'ID_VEN' }));
             fetch('/api/dashboard/servicios').then(res => res.json()).then(data => llenarTabla('tabla-servicios', ['ID', 'Cliente', 'Trabajo', 'Costo'], ['ID_SERV', 'ID_CLI', 'TRAB_REAL', 'COSTO_SERV'], data, { tablaSQL: 'SERVICIOS', idCol: 'ID_SERV' }));
@@ -162,17 +231,17 @@
             datos.forEach(item => { 
                 html += `<tr>`;
                 keysSQL.forEach(k => {
-                    let val = item[k] !== null ? item[k] : '';
-                    if (typeof val === 'number' && (k.includes('PREC') || k.includes('COSTO') || k.includes('TOT'))) {
+                    let val = item[k] !== null && item[k] !== undefined ? item[k] : '';
+                    if (typeof val === 'number' && (k.includes('PREC') || k.includes('COSTO') || k.includes('TOT') || k.includes('SUE'))) {
                         html += `<td>$${val.toFixed(2)}</td>`;
                     } else {
-                        html += `<td>${val}</td>`;
+                        html += `<td>${escapeHtml(val)}</td>`;
                     }
                 });
                 
                 // Si es admin, inyectamos la data de la fila directo al botón
                 if (isAdmin) {
-                    const itemDataStr = encodeURIComponent(JSON.stringify(item));
+                    const itemDataStr = encodeURIComponent(JSON.stringify(item)).replace(/'/g, '%27');
                     html += `<td><button onclick="abrirEditor('${config.tablaSQL}', '${config.idCol}', decodeURIComponent('${itemDataStr}'))" class="btn-editar">Editar</button></td>`;
                 }
                 html += `</tr>`; 
@@ -182,7 +251,7 @@
         }
 
         function abrirEditor(tabla, idCol, itemStr) {
-            const item = JSON.parse(itemStr);
+            let item = JSON.parse(itemStr);
             document.getElementById('editTabla').value = tabla;
             document.getElementById('editIdCol').value = idCol;
             document.getElementById('editIdValue').value = item[idCol];
@@ -191,30 +260,207 @@
             const contenedor = document.getElementById('contenedorCampos');
             contenedor.innerHTML = '';
 
+            // Si es la tabla CLIENTES, asegurar que todos los campos del cliente estén presentes y sean editables: dirección, correo, comentarios y preferencia (CU-16 / CU-42 / CU-43 / CU-47)
+            if (tabla === 'CLIENTES' || tabla.toUpperCase() === 'CLIENTES') {
+                const clienteOrdenado = {
+                    ID_CLI: item['ID_CLI'] || '',
+                    NOM_CLI: item['NOM_CLI'] || '',
+                    DIR_CLI: item['DIR_CLI'] !== undefined ? item['DIR_CLI'] : '',
+                    TEL_CLI: item['TEL_CLI'] !== undefined ? item['TEL_CLI'] : '',
+                    COR_CLI: item['COR_CLI'] !== undefined ? item['COR_CLI'] : '',
+                    COM_CLI: item['COM_CLI'] !== undefined ? item['COM_CLI'] : '',
+                    PREF_CLI: item['PREF_CLI'] !== undefined ? item['PREF_CLI'] : ''
+                };
+                Object.keys(item).forEach(k => {
+                    if (!(k in clienteOrdenado)) {
+                        clienteOrdenado[k] = item[k];
+                    }
+                });
+                item = clienteOrdenado;
+            }
+
+            // Si es la tabla PROVEEDORES, asegurar que el campo de contacto/correo CON_PROV esté presente y sea editable (CU-16 / CU-45)
+            if (tabla === 'PROVEEDORES' || tabla.toUpperCase() === 'PROVEEDORES') {
+                if (!('NOM_PROV' in item)) item['NOM_PROV'] = '';
+                if (!('RFC_PROV' in item)) item['RFC_PROV'] = '';
+                if (!('CON_PROV' in item)) item['CON_PROV'] = '';
+                if (!('DIR_PROV' in item)) item['DIR_PROV'] = '';
+                if (!('TIP_SUM' in item)) item['TIP_SUM'] = '';
+                if (!('PRO_PROV' in item)) item['PRO_PROV'] = '';
+            }
+
+            // Si es la tabla EMPLEADOS, asegurar que el campo Sueldo (SUE_EMP) esté presente y sea editable (CU-16 / CU-46)
+            if (tabla === 'EMPLEADOS' || tabla.toUpperCase() === 'EMPLEADOS') {
+                if (!('NOM_EMP' in item)) item['NOM_EMP'] = '';
+                if (!('PUE_EMP' in item)) item['PUE_EMP'] = '';
+                if (!('SUE_EMP' in item)) item['SUE_EMP'] = 0;
+                if (!('CURP_EMP' in item)) item['CURP_EMP'] = '';
+                if (!('DIR_EMP' in item)) item['DIR_EMP'] = '';
+                if (!('HOR_EMP' in item)) item['HOR_EMP'] = '';
+                if (!('TIP_EMP' in item)) item['TIP_EMP'] = '';
+            }
+
+            // Si es la tabla PRODUCTOS, asegurar que todos los campos del producto estén presentes y sean editables, incluido Proveedor (CU-16 / CU-50 / RN-20)
+            if (tabla === 'PRODUCTOS' || tabla.toUpperCase() === 'PRODUCTOS') {
+                const productoOrdenado = {
+                    ID_PRO: item['ID_PRO'] || '',
+                    DESC_PRO: item['DESC_PRO'] || '',
+                    TIP_PRO: item['TIP_PRO'] !== undefined ? item['TIP_PRO'] : '',
+                    STOCK_PRO: item['STOCK_PRO'] !== undefined ? item['STOCK_PRO'] : 0,
+                    PREC_PRO: item['PREC_PRO'] !== undefined ? item['PREC_PRO'] : 0,
+                    ID_PROV: item['ID_PROV'] !== undefined ? item['ID_PROV'] : (item['id_prov'] !== undefined ? item['id_prov'] : '')
+                };
+                Object.keys(item).forEach(k => {
+                    if (!(k in productoOrdenado)) {
+                        productoOrdenado[k] = item[k];
+                    }
+                });
+                item = productoOrdenado;
+            }
+
+            // Si es la tabla PLANTAS, asegurar que todos los campos de la planta estén presentes y sean editables, incluido Proveedor (CU-16 / CU-49)
+            if (tabla === 'PLANTAS' || tabla.toUpperCase() === 'PLANTAS') {
+                const plantaOrdenada = {
+                    ID_PLANTA: item['ID_PLANTA'] || '',
+                    NOM_CTFO: item['NOM_CTFO'] || '',
+                    NOM_COM: item['NOM_COM'] !== undefined ? item['NOM_COM'] : '',
+                    TIP_PLANTA: item['TIP_PLANTA'] !== undefined ? item['TIP_PLANTA'] : '',
+                    STOCK_PLANT: item['STOCK_PLANT'] !== undefined ? item['STOCK_PLANT'] : 0,
+                    PREC_PLANTA: item['PREC_PLANTA'] !== undefined ? item['PREC_PLANTA'] : 0,
+                    PROV_PLANT: item['PROV_PLANT'] !== undefined ? item['PROV_PLANT'] : ''
+                };
+                Object.keys(item).forEach(k => {
+                    if (!(k in plantaOrdenada)) {
+                        plantaOrdenada[k] = item[k];
+                    }
+                });
+                item = plantaOrdenada;
+            }
+
             // Generar un input por cada columna extraída de la base de datos
             Object.keys(item).forEach(key => {
                 const val = item[key] !== null ? item[key] : '';
                 const isPrimaryKey = (key === idCol);
                 
+                let labelText = key;
+                let inputType = typeof val === 'number' ? 'number' : 'text';
+
+                if (key === 'COR_CLI' || key.toLowerCase().includes('cor_cli')) {
+                    labelText = 'Correo Electrónico';
+                    inputType = 'email';
+                } else if (key === 'CON_PROV' || key.toLowerCase().includes('con_prov')) {
+                    labelText = 'Contacto / Correo';
+                    inputType = 'text';
+                } else if (key === 'SUE_EMP' || key.toLowerCase().includes('sue_emp')) {
+                    labelText = 'Sueldo';
+                    inputType = 'number';
+                } else if (key === 'NOM_EMP') {
+                    labelText = 'Nombre del Empleado';
+                } else if (key === 'PUE_EMP') {
+                    labelText = 'Puesto';
+                } else if (key === 'CURP_EMP') {
+                    labelText = 'CURP';
+                } else if (key === 'DIR_EMP') {
+                    labelText = 'Dirección';
+                } else if (key === 'HOR_EMP') {
+                    labelText = 'Horario';
+                } else if (key === 'TIP_EMP') {
+                    labelText = 'Tipo de Empleado';
+                } else if (key === 'NOM_PROV') {
+                    labelText = 'Nombre del Proveedor';
+                } else if (key === 'RFC_PROV') {
+                    labelText = 'RFC';
+                } else if (key === 'DIR_PROV') {
+                    labelText = 'Dirección';
+                } else if (key === 'TIP_SUM') {
+                    labelText = 'Tipo de Suministro';
+                } else if (key === 'PRO_PROV') {
+                    labelText = 'Producto Principal';
+                } else if (key === 'NOM_CLI') {
+                    labelText = 'Nombre del Cliente';
+                } else if (key === 'DIR_CLI') {
+                    labelText = 'Dirección';
+                } else if (key === 'TEL_CLI') {
+                    labelText = 'Teléfono';
+                } else if (key === 'COM_CLI') {
+                    labelText = 'Comentarios';
+                } else if (key === 'PREF_CLI') {
+                    labelText = 'Preferencia';
+                } else if (key === 'PREC_PRO' || key === 'PREC_PLANTA') {
+                    labelText = 'Precio';
+                    inputType = 'number';
+                } else if (key === 'STOCK_PRO' || key === 'STOCK_PLANT') {
+                    labelText = 'Stock';
+                    inputType = 'number';
+                } else if (key === 'DESC_PRO') {
+                    labelText = 'Descripción';
+                } else if (key === 'ID_PROV' || key === 'PROV_PLANT' || key.toLowerCase() === 'id_prov' || key.toLowerCase() === 'prov_plant') {
+                    labelText = 'Proveedor';
+                    inputType = 'text';
+                } else if (key === 'TIP_PRO' || key === 'TIP_PLANTA') {
+                    labelText = 'Tipo';
+                    inputType = 'text';
+                } else if (key === 'NOM_CTFO') {
+                    labelText = 'Nombre Científico';
+                } else if (key === 'NOM_COM') {
+                    labelText = 'Nombre Común';
+                }
+
+                // Solo las llaves primarias o nombres obligatorios llevan required
+                const isRequired = isPrimaryKey || key === 'NOM_CLI' || key === 'NOM_PROV' || key === 'NOM_SERV' || key === 'NOM_EMP' || key === 'DESC_PRO' || key === 'ID_PROV';
+                
                 let htmlCampo = `
-                    <div style="margin-bottom: 12px;">
-                        <label style="display: block; font-size: 12px; font-weight: bold; margin-bottom: 4px; color: #555;">${key}</label>
-                        <input type="${typeof val === 'number' ? 'number' : 'text'}" 
+                    <div style="margin-bottom: 12px;" id="contenedor_${key}">
+                        <label for="edit_${key}" style="display: block; font-size: 12px; font-weight: bold; margin-bottom: 4px; color: #555;">${labelText}</label>
+                        <input type="${inputType}" 
+                               id="edit_${key}"
+                               name="${key}"
+                               data-name="${key.toLowerCase()}"
                                step="any"
+                               ${inputType === 'number' ? 'min="0"' : ''}
                                class="campo-editor"
                                data-key="${key}"
-                               value="${val}" 
+                               placeholder="${labelText}"
+                               value="${escapeHtml(val)}" 
                                ${isPrimaryKey ? 'readonly style="background-color: #e9ecef; color:#666; border: 1px solid #ccc; width: 100%; padding: 8px; border-radius: 4px;"' : 'style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"'}
-                               required>
+                               ${isRequired ? 'required' : ''}>
                     </div>
                 `;
                 contenedor.innerHTML += htmlCampo;
             });
 
+            // Asegurar que para CLIENTES los campos Comentarios y Preferencia siempre estén presentes y visibles en el formulario de edición (CU-16 / CU-43 / CU-44 / CU-52)
+            if (tabla === 'CLIENTES' || tabla.toUpperCase() === 'CLIENTES') {
+                if (!document.getElementById('edit_COM_CLI')) {
+                    const div = document.createElement('div');
+                    div.style.marginBottom = '12px';
+                    div.id = 'contenedor_COM_CLI';
+                    div.innerHTML = `<label for="edit_COM_CLI" style="display: block; font-size: 12px; font-weight: bold; margin-bottom: 4px; color: #555;">Comentarios</label>
+                    <input type="text" id="edit_COM_CLI" name="COM_CLI" data-key="COM_CLI" placeholder="Comentarios" class="campo-editor" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">`;
+                    contenedor.appendChild(div);
+                }
+                if (!document.getElementById('edit_PREF_CLI')) {
+                    const div = document.createElement('div');
+                    div.style.marginBottom = '12px';
+                    div.id = 'contenedor_PREF_CLI';
+                    div.innerHTML = `<label for="edit_PREF_CLI" style="display: block; font-size: 12px; font-weight: bold; margin-bottom: 4px; color: #555;">Preferencia</label>
+                    <input type="text" id="edit_PREF_CLI" name="PREF_CLI" data-key="PREF_CLI" placeholder="Preferencia" class="campo-editor" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">`;
+                    contenedor.appendChild(div);
+                }
+            }
+
+            // Asignación segura del valor directo en la propiedad DOM value para que etiquetas HTML o instrucciones SQL no rompan los inputs (V-01 / V-07 / CU-52)
+            Object.keys(item).forEach(key => {
+                const inputEl = document.getElementById(`edit_${key}`);
+                if (inputEl) {
+                    inputEl.value = item[key] !== null && item[key] !== undefined ? item[key] : '';
+                }
+            });
+
             document.getElementById('modalEditor').style.display = 'flex';
         }
 
-        function guardarEdicion(event) {
+        async function guardarEdicion(event) {
             event.preventDefault();
             const tabla = document.getElementById('editTabla').value;
             const idCol = document.getElementById('editIdCol').value;
@@ -229,10 +475,142 @@
                 }
             });
 
+            // Validación y sanitización específica para CLIENTES (CU-11 / CU-12 / CU-16 / CU-42 / CU-43 / CU-44 / CU-47 / CU-52 / RN-18 / V-01 / V-07)
+            if (tabla.toUpperCase() === 'CLIENTES') {
+                // Sanitizar Comentarios, Preferencia y Dirección contra inyección SQL y etiquetas HTML (V-01 / V-07 / CU-52)
+                if (campos['COM_CLI'] !== undefined && campos['COM_CLI'] !== null) {
+                    campos['COM_CLI'] = sanitizarSqlYHtml(campos['COM_CLI']);
+                    const inputCom = document.getElementById('edit_COM_CLI');
+                    if (inputCom) inputCom.value = campos['COM_CLI'];
+                }
+                if (campos['PREF_CLI'] !== undefined && campos['PREF_CLI'] !== null) {
+                    campos['PREF_CLI'] = sanitizarSqlYHtml(campos['PREF_CLI']);
+                    const inputPref = document.getElementById('edit_PREF_CLI');
+                    if (inputPref) inputPref.value = campos['PREF_CLI'];
+                }
+                if (campos['DIR_CLI'] !== undefined && campos['DIR_CLI'] !== null) {
+                    campos['DIR_CLI'] = sanitizarSqlYHtml(campos['DIR_CLI']);
+                    const inputDir = document.getElementById('edit_DIR_CLI');
+                    if (inputDir) inputDir.value = campos['DIR_CLI'];
+                }
+
+                const rawCorreo = campos['COR_CLI'] !== undefined ? campos['COR_CLI'] : campos['cor_cli'];
+                if (rawCorreo !== undefined && rawCorreo !== null && String(rawCorreo).trim() !== '') {
+                    const corVal = String(rawCorreo).trim();
+                    const partesCorreo = corVal.split('@');
+                    if (partesCorreo.length !== 2 || !partesCorreo[1] || !partesCorreo[1].trim()) {
+                        mostrarMensaje("Correo Inválido", 'El correo electrónico debe incluir un dominio después del símbolo "@" (ejemplo: usuario@dominio.com).');
+                        return;
+                    }
+
+                    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+                    if (!emailRegex.test(corVal)) {
+                        mostrarMensaje("Formato Inválido", 'El correo electrónico no cumple con un formato válido con dominio (ejemplo: usuario@dominio.com).');
+                        return;
+                    }
+                }
+            }
+
+            // Validación específica para PRODUCTOS (CU-21 / CU-48 / CU-50 / RN-16 / RN-20)
+            if (tabla.toUpperCase() === 'PRODUCTOS') {
+                const rawPrecio = campos['PREC_PRO'] !== undefined ? campos['PREC_PRO'] : (campos['prec_pro'] !== undefined ? campos['prec_pro'] : campos['precio']);
+                if (rawPrecio !== undefined && rawPrecio !== null && String(rawPrecio).trim() !== '') {
+                    const numPrecio = parseFloat(rawPrecio);
+                    if (isNaN(numPrecio) || numPrecio < 0) {
+                        mostrarMensaje("Precio Inválido", 'El precio del producto debe ser mayor o igual a 0 y no puede ser negativo (RN-16).');
+                        return;
+                    }
+                }
+
+                // Validación de proveedor existente para PRODUCTOS (CU-50 / RN-20)
+                const rawProv = campos['ID_PROV'] !== undefined ? campos['ID_PROV'] : (campos['id_prov'] !== undefined ? campos['id_prov'] : campos['proveedor']);
+                if (rawProv !== undefined && rawProv !== null && String(rawProv).trim() !== '') {
+                    const provVal = String(rawProv).trim().toLowerCase();
+                    if (!listaProveedores || listaProveedores.length === 0) {
+                        try {
+                            const resP = await fetch('/api/proveedores');
+                            listaProveedores = await resP.json();
+                        } catch(e) {}
+                    }
+                    if (listaProveedores && listaProveedores.length > 0) {
+                        const existe = listaProveedores.some(p => 
+                            (p.ID_PROV && p.ID_PROV.trim().toLowerCase() === provVal) || 
+                            (p.NOM_PROV && p.NOM_PROV.trim().toLowerCase() === provVal)
+                        );
+                        if (!existe) {
+                            mostrarMensaje("Proveedor Inválido", 'El proveedor seleccionado no existe en el sistema (RN-20).');
+                            return;
+                        }
+                    }
+                } else {
+                    mostrarMensaje("Validación", 'El proveedor es obligatorio (RN-20).');
+                    return;
+                }
+            }
+
+            // Validación específica para PLANTAS (CU-24 / CU-49 / RN-17 / RN-20)
+            if (tabla.toUpperCase() === 'PLANTAS') {
+                const rawStock = campos['STOCK_PLANT'] !== undefined ? campos['STOCK_PLANT'] : campos['stock'];
+                if (rawStock !== undefined && rawStock !== null && String(rawStock).trim() !== '') {
+                    const numStock = Number(String(rawStock).trim());
+                    if (isNaN(numStock) || !Number.isInteger(numStock) || numStock < 0) {
+                        mostrarMensaje("Stock Inválido", 'El stock de la planta debe ser un número entero mayor o igual a 0 (no se permiten valores negativos, RN-17).');
+                        return;
+                    }
+                }
+
+                const rawProvPlanta = campos['PROV_PLANT'] !== undefined ? campos['PROV_PLANT'] : campos['prov_plant'];
+                if (rawProvPlanta !== undefined && rawProvPlanta !== null && String(rawProvPlanta).trim() !== '') {
+                    const provVal = String(rawProvPlanta).trim().toLowerCase();
+                    if (!listaProveedores || listaProveedores.length === 0) {
+                        try {
+                            const resP = await fetch('/api/proveedores');
+                            listaProveedores = await resP.json();
+                        } catch(e) {}
+                    }
+                    if (listaProveedores && listaProveedores.length > 0) {
+                        const existe = listaProveedores.some(p => 
+                            (p.ID_PROV && p.ID_PROV.trim().toLowerCase() === provVal) || 
+                            (p.NOM_PROV && p.NOM_PROV.trim().toLowerCase() === provVal)
+                        );
+                        if (!existe) {
+                            mostrarMensaje("Proveedor Inválido", 'El proveedor seleccionado no existe en el sistema (RN-20).');
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // Validación de stock para PRODUCTOS (CU-22 / RN-17)
+            if (tabla.toUpperCase() === 'PRODUCTOS') {
+                const rawStock = campos['STOCK_PRO'] !== undefined ? campos['STOCK_PRO'] : campos['stock'];
+                if (rawStock !== undefined && rawStock !== null && String(rawStock).trim() !== '') {
+                    const numStock = Number(String(rawStock).trim());
+                    if (isNaN(numStock) || !Number.isInteger(numStock) || numStock < 0) {
+                        mostrarMensaje("Stock Inválido", 'El stock del producto debe ser un número entero mayor o igual a 0 (no se permiten valores negativos, RN-17).');
+                        return;
+                    }
+                }
+            }
+
+            const usuarioActual = localStorage.getItem('usuarioLogueado') || '';
+            const rolActual = localStorage.getItem('rolUsuario') || '';
+
             fetch('/api/actualizar', {
                 method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ tabla, idColumn: idCol, idValue, campos })
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'x-rol-usuario': rolActual,
+                    'x-usuario': usuarioActual
+                },
+                body: JSON.stringify({ 
+                    tabla, 
+                    idColumn: idCol, 
+                    idValue, 
+                    campos,
+                    rolUsuario: rolActual,
+                    usuarioLogueado: usuarioActual
+                })
             })
             .then(res => res.json())
             .then(data => {
@@ -240,10 +618,26 @@
                     cerrarEditor();
                     window.location.reload(); // Recargamos para reflejar los cambios
                 } else {
-                    alert('Error en SQL: ' + data.error);
+                    mostrarMensaje("Error", 'Error en actualización: ' + (data.error || 'No se pudo actualizar'));
                 }
             })
-            .catch(err => alert('Error de comunicación con el servidor'));
+            .catch(err => mostrarMensaje("Error", 'Error de comunicación con el servidor'));
+        }
+
+        function mostrarMensaje(titulo, mensaje) {
+            const modal = document.getElementById('modalMensaje');
+            if (modal) {
+                document.getElementById('tituloModal').innerText = titulo;
+                document.getElementById('textoModal').innerText = mensaje;
+                modal.style.display = 'flex';
+            }
+            try {
+                alert(mensaje);
+            } catch(e) {}
+        }
+
+        function cerrarModal() {
+            document.getElementById('modalMensaje').style.display = 'none';
         }
 
         function cerrarEditor() {
