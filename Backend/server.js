@@ -3312,13 +3312,23 @@ async function procesarEliminacion(req, res, tabla, idColumn, idValue) {
             });
         }
     } else if (tablaUpper === 'CAT_SERVICIOS') {
-        const checkServ = await pool.query('SELECT COUNT(*) AS "total" FROM SERVICIOS WHERE TRIM(ID_CAT_SERV) = TRIM($1)', [idStr]);
-        const totServ = parseInt(checkServ.rows[0]?.total, 10) || 0;
-        if (totServ > 0) {
-            return res.status(400).json({
-                exito: false,
-                error: `No se puede eliminar el servicio del catálogo "${idStr}" porque tiene ${totServ} servicio(s) registrados. Según la regla RN-26 no se pueden eliminar registros con dependencias.`
-            });
+        try {
+            const hasCol = await pool.query(`
+                SELECT 1 FROM information_schema.columns 
+                WHERE LOWER(table_name) = 'servicios' AND LOWER(column_name) = 'id_cat_serv'
+            `);
+            if (hasCol.rows.length > 0) {
+                const checkServ = await pool.query('SELECT COUNT(*) AS "total" FROM SERVICIOS WHERE TRIM(ID_CAT_SERV) = TRIM($1)', [idStr]);
+                const totServ = parseInt(checkServ.rows[0]?.total, 10) || 0;
+                if (totServ > 0) {
+                    return res.status(400).json({
+                        exito: false,
+                        error: `No se puede eliminar el servicio del catálogo "${idStr}" porque tiene ${totServ} servicio(s) registrados. Según la regla RN-26 no se pueden eliminar registros con dependencias.`
+                    });
+                }
+            }
+        } catch (e) {
+            console.error('Aviso al comprobar dependencias de CAT_SERVICIOS:', e.message);
         }
     } else if (tablaUpper === 'USUARIOS') {
         if (idStr.toLowerCase() === 'usr-001' || idStr.toLowerCase() === 'admin') {
@@ -3417,67 +3427,89 @@ entidadesEliminables.forEach(({ ruta, tabla, idCol }) => {
     });
 });
 
-// Limpieza de datos inválidos y artefactos heredados en Supabase (N8)
+// Limpieza de datos inválidos y artefactos heredados en Supabase (N8 / E5)
 async function limpiarDatosInvalidosBaseDatos() {
     try {
-        console.log('Iniciando limpieza de datos inválidos y pruebas negativas heredadas en Supabase (N8)...');
+        console.log('Iniciando limpieza de datos inválidos y pruebas negativas heredadas en Supabase (N8 / E5)...');
+
+        // 1. CLIENTES: Eliminar CLI-026 y clientes sin nombre si no tienen referencias activas (RN-12 / N8)
+        const resCli = await pool.query(`
+            DELETE FROM CLIENTES 
+            WHERE (ID_CLI = 'CLI-026' OR NOM_CLI IS NULL OR TRIM(NOM_CLI) = '')
+              AND ID_CLI NOT IN (SELECT ID_CLI FROM VENTAS WHERE ID_CLI IS NOT NULL)
+              AND ID_CLI NOT IN (SELECT ID_CLI FROM PEDIDOS WHERE ID_CLI IS NOT NULL)
+              AND ID_CLI NOT IN (SELECT ID_CLI FROM SERVICIOS WHERE ID_CLI IS NOT NULL)
+        `);
+        await pool.query(`
+            UPDATE CLIENTES 
+            SET NOM_CLI = 'Cliente General' 
+            WHERE (ID_CLI = 'CLI-026' OR NOM_CLI IS NULL OR TRIM(NOM_CLI) = '')
+        `);
+
+        // 2. EMPLEADOS: Eliminar EMP-013, EMP-019 y empleados con sueldo negativo (RN-16 / N8)
+        await pool.query(`
+            UPDATE USUARIOS SET ID_EMP = NULL 
+            WHERE ID_EMP IN ('EMP-013', 'EMP-019') 
+               OR ID_EMP IN (SELECT ID_EMP FROM EMPLEADOS WHERE SUE_EMP < 0)
+        `);
+        await pool.query(`
+            UPDATE SERVICIOS SET ID_EMP = NULL 
+            WHERE ID_EMP IN ('EMP-013', 'EMP-019') 
+               OR ID_EMP IN (SELECT ID_EMP FROM EMPLEADOS WHERE SUE_EMP < 0)
+        `);
+        const resEmp = await pool.query(`
+            DELETE FROM EMPLEADOS 
+            WHERE ID_EMP IN ('EMP-013', 'EMP-019') OR SUE_EMP < 0
+        `);
+        await pool.query(`UPDATE EMPLEADOS SET SUE_EMP = 0 WHERE SUE_EMP < 0`);
+
+        // 3. PRODUCTOS: Eliminar PRO-003, PRO-005, PRO-014, PRO-015, PRO-018 y productos con precio/stock negativo (RN-16 / RN-17 / N8)
+        const resPro = await pool.query(`
+            DELETE FROM PRODUCTOS
+            WHERE (ID_PRO IN ('PRO-003', 'PRO-005', 'PRO-014', 'PRO-015', 'PRO-018') OR PREC_PRO < 0 OR STOCK_PRO < 0)
+              AND ID_PRO NOT IN (SELECT ID_PRO FROM VENTAS WHERE ID_PRO IS NOT NULL)
+              AND ID_PRO NOT IN (SELECT ID_PRO FROM PEDIDOS WHERE ID_PRO IS NOT NULL)
+        `);
+        await pool.query(`UPDATE PRODUCTOS SET PREC_PRO = 0 WHERE PREC_PRO < 0`);
+        await pool.query(`UPDATE PRODUCTOS SET STOCK_PRO = 0 WHERE STOCK_PRO < 0`);
+
+        // 4. PLANTAS: Eliminar PLN-014, PLN-021, PLN-005, PLN-004, PLN-013, PLN-020 y plantas con stock/precio negativo (RN-16 / RN-17 / N8)
+        const resPln = await pool.query(`
+            DELETE FROM PLANTAS
+            WHERE (ID_PLANTA IN ('PLN-014', 'PLN-021', 'PLN-005', 'PLN-004', 'PLN-013', 'PLN-020') OR STOCK_PLANT < 0 OR PREC_PLANTA < 0)
+              AND ID_PLANTA NOT IN (SELECT ID_PLANTA FROM VENTAS WHERE ID_PLANTA IS NOT NULL)
+              AND ID_PLANTA NOT IN (SELECT ID_PLANTA FROM PEDIDOS WHERE ID_PLANTA IS NOT NULL)
+        `);
+        await pool.query(`UPDATE PLANTAS SET STOCK_PLANT = 0 WHERE STOCK_PLANT < 0`);
+        await pool.query(`UPDATE PLANTAS SET PREC_PLANTA = 0 WHERE PREC_PLANTA < 0`);
+
+        // 5. CAT_SERVICIOS: Eliminar CSV-010, CSV-016 y servicios de catálogo con costo negativo (RN-16 / RN-33 / N8 / E5)
+        // Corregido: se elimina la condición errónea contra SERVICIOS (SERVICIOS no tiene ID_CAT_SERV)
+        const resCat = await pool.query(`
+            DELETE FROM CAT_SERVICIOS
+            WHERE ID_CAT_SERV IN ('CSV-010', 'CSV-016') OR COSTO_EST < 0
+        `);
+        await pool.query(`UPDATE CAT_SERVICIOS SET COSTO_EST = 0 WHERE COSTO_EST < 0`);
+
+        // Registro en log de filas eliminadas por tabla
+        console.log(`[Limpieza] Filas eliminadas por tabla: CLIENTES: ${resCli.rowCount || 0}, EMPLEADOS: ${resEmp.rowCount || 0}, PRODUCTOS: ${resPro.rowCount || 0}, PLANTAS: ${resPln.rowCount || 0}, CAT_SERVICIOS: ${resCat.rowCount || 0}`);
+
+        // Verificación con SELECT de que no quedan registros inválidos
+        const checkSelect = await pool.query(`
+            SELECT 
+                (SELECT COUNT(*) FROM CLIENTES WHERE ID_CLI = 'CLI-026' OR NOM_CLI IS NULL OR TRIM(NOM_CLI) = '') AS "clientes_invalidos",
+                (SELECT COUNT(*) FROM EMPLEADOS WHERE ID_EMP IN ('EMP-013', 'EMP-019') OR SUE_EMP < 0) AS "empleados_invalidos",
+                (SELECT COUNT(*) FROM PRODUCTOS WHERE ID_PRO IN ('PRO-003', 'PRO-005', 'PRO-014', 'PRO-015', 'PRO-018') OR PREC_PRO < 0 OR STOCK_PRO < 0) AS "productos_invalidos",
+                (SELECT COUNT(*) FROM PLANTAS WHERE ID_PLANTA IN ('PLN-014', 'PLN-021', 'PLN-005', 'PLN-004', 'PLN-013', 'PLN-020') OR STOCK_PLANT < 0 OR PREC_PLANTA < 0) AS "plantas_invalidas",
+                (SELECT COUNT(*) FROM CAT_SERVICIOS WHERE ID_CAT_SERV IN ('CSV-010', 'CSV-016') OR COSTO_EST < 0) AS "cat_servicios_invalidos"
+        `);
+        const v = checkSelect.rows[0];
+        console.log(`[Verificación SELECT post-limpieza] Registros inválidos restantes en BD: CLIENTES: ${v.clientes_invalidos}, EMPLEADOS: ${v.empleados_invalidos}, PRODUCTOS: ${v.productos_invalidos}, PLANTAS: ${v.plantas_invalidas}, CAT_SERVICIOS: ${v.cat_servicios_invalidos}`);
+
+        // 6. Restricciones CHECK, 7. AUDITORIA_USUARIOS y 8. Restauración de USR-011
         await pool.query(`
             DO $$
             BEGIN
-                -- 1. CLIENTES: Eliminar CLI-026 y clientes sin nombre si no tienen referencias activas (RN-12 / N8)
-                DELETE FROM CLIENTES 
-                WHERE (ID_CLI = 'CLI-026' OR NOM_CLI IS NULL OR TRIM(NOM_CLI) = '')
-                  AND ID_CLI NOT IN (SELECT ID_CLI FROM VENTAS WHERE ID_CLI IS NOT NULL)
-                  AND ID_CLI NOT IN (SELECT ID_CLI FROM PEDIDOS WHERE ID_CLI IS NOT NULL)
-                  AND ID_CLI NOT IN (SELECT ID_CLI FROM SERVICIOS WHERE ID_CLI IS NOT NULL);
-
-                -- Si alguno tuviese dependencias, asegurar que tenga un nombre válido no vacío
-                UPDATE CLIENTES 
-                SET NOM_CLI = 'Cliente General' 
-                WHERE (ID_CLI = 'CLI-026' OR NOM_CLI IS NULL OR TRIM(NOM_CLI) = '');
-
-                -- 2. EMPLEADOS: Eliminar EMP-013, EMP-019 y empleados con sueldo negativo (RN-16 / N8)
-                -- Desvincular de llaves foráneas para permitir eliminación limpia de pruebas inválidas
-                UPDATE USUARIOS SET ID_EMP = NULL 
-                WHERE ID_EMP IN ('EMP-013', 'EMP-019') 
-                   OR ID_EMP IN (SELECT ID_EMP FROM EMPLEADOS WHERE SUE_EMP < 0);
-
-                UPDATE SERVICIOS SET ID_EMP = NULL 
-                WHERE ID_EMP IN ('EMP-013', 'EMP-019') 
-                   OR ID_EMP IN (SELECT ID_EMP FROM EMPLEADOS WHERE SUE_EMP < 0);
-
-                DELETE FROM EMPLEADOS 
-                WHERE ID_EMP IN ('EMP-013', 'EMP-019') OR SUE_EMP < 0;
-
-                -- Por si quedó algún empleado no eliminable con sueldo negativo
-                UPDATE EMPLEADOS SET SUE_EMP = 0 WHERE SUE_EMP < 0;
-
-                -- 3. PRODUCTOS: Eliminar PRO-003, PRO-005, PRO-014, PRO-015, PRO-018 y productos con precio/stock negativo (RN-16 / RN-17 / N8)
-                DELETE FROM PRODUCTOS
-                WHERE (ID_PRO IN ('PRO-003', 'PRO-005', 'PRO-014', 'PRO-015', 'PRO-018') OR PREC_PRO < 0 OR STOCK_PRO < 0)
-                  AND ID_PRO NOT IN (SELECT ID_PRO FROM VENTAS WHERE ID_PRO IS NOT NULL)
-                  AND ID_PRO NOT IN (SELECT ID_PRO FROM PEDIDOS WHERE ID_PRO IS NOT NULL);
-
-                UPDATE PRODUCTOS SET PREC_PRO = 0 WHERE PREC_PRO < 0;
-                UPDATE PRODUCTOS SET STOCK_PRO = 0 WHERE STOCK_PRO < 0;
-
-                -- 4. PLANTAS: Eliminar PLN-014, PLN-021, PLN-005, PLN-004, PLN-013, PLN-020 y plantas con stock/precio negativo (RN-16 / RN-17 / N8)
-                DELETE FROM PLANTAS
-                WHERE (ID_PLANTA IN ('PLN-014', 'PLN-021', 'PLN-005', 'PLN-004', 'PLN-013', 'PLN-020') OR STOCK_PLANT < 0 OR PREC_PLANTA < 0)
-                  AND ID_PLANTA NOT IN (SELECT ID_PLANTA FROM VENTAS WHERE ID_PLANTA IS NOT NULL)
-                  AND ID_PLANTA NOT IN (SELECT ID_PLANTA FROM PEDIDOS WHERE ID_PLANTA IS NOT NULL);
-
-                UPDATE PLANTAS SET STOCK_PLANT = 0 WHERE STOCK_PLANT < 0;
-                UPDATE PLANTAS SET PREC_PLANTA = 0 WHERE PREC_PLANTA < 0;
-
-                -- 5. CAT_SERVICIOS: Eliminar CSV-010, CSV-016 y servicios de catálogo con costo negativo (RN-16 / RN-33 / N8)
-                DELETE FROM CAT_SERVICIOS
-                WHERE (ID_CAT_SERV IN ('CSV-010', 'CSV-016') OR COSTO_EST < 0)
-                  AND ID_CAT_SERV NOT IN (SELECT ID_CAT_SERV FROM SERVICIOS WHERE ID_CAT_SERV IS NOT NULL);
-
-                UPDATE CAT_SERVICIOS SET COSTO_EST = 0 WHERE COSTO_EST < 0;
-
-                -- 6. Agregar restricciones CHECK para garantizar integridad permanente a nivel de base de datos
                 IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'chk_sue_emp_no_negativo') THEN
                     ALTER TABLE EMPLEADOS ADD CONSTRAINT chk_sue_emp_no_negativo CHECK (SUE_EMP >= 0);
                 END IF;
@@ -3506,7 +3538,6 @@ async function limpiarDatosInvalidosBaseDatos() {
                     ALTER TABLE CLIENTES ADD CONSTRAINT chk_nom_cli_no_vacio CHECK (NOM_CLI IS NOT NULL AND TRIM(NOM_CLI) <> '');
                 END IF;
 
-                -- 7. AUDITORIA_USUARIOS: Tabla de trazabilidad y bitácora de cambios de usuarios (N9)
                 IF NOT EXISTS (
                     SELECT 1 FROM information_schema.tables 
                     WHERE LOWER(table_name) = 'auditoria_usuarios'
@@ -3523,7 +3554,6 @@ async function limpiarDatosInvalidosBaseDatos() {
                     );
                 END IF;
 
-                -- 8. USUARIOS: Restauración de integridad para USR-011 y evitar huecos en el catálogo (N9)
                 IF NOT EXISTS (SELECT 1 FROM USUARIOS WHERE TRIM(ID_USUARIO) = 'USR-011') THEN
                     INSERT INTO USUARIOS (ID_USUARIO, USERNAME, PASSWORD, ROL, ID_EMP, ESTADO)
                     VALUES (
@@ -3549,11 +3579,22 @@ async function limpiarDatosInvalidosBaseDatos() {
                 END IF;
             END $$;
         `);
-        console.log('Limpieza de datos inválidos completada exitosamente en Supabase (N8).');
-        return true;
+
+        console.log('Limpieza de datos inválidos completada exitosamente en Supabase (N8 / E5).');
+        return {
+            exito: true,
+            borrados: {
+                clientes: resCli.rowCount || 0,
+                empleados: resEmp.rowCount || 0,
+                productos: resPro.rowCount || 0,
+                plantas: resPln.rowCount || 0,
+                cat_servicios: resCat.rowCount || 0
+            },
+            verificacion: v
+        };
     } catch (limpiezaErr) {
         console.error('Aviso durante la limpieza de datos inválidos:', limpiezaErr.message);
-        return false;
+        return { exito: false, error: limpiezaErr.message };
     }
 }
 
