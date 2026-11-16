@@ -403,9 +403,32 @@
                 return;
             }
 
+            if (id_producto) {
+                const prodSel = listaProductos.find(p => p.ID_PRO === id_producto);
+                if (prodSel) {
+                    const stockDisponible = parseInt(prodSel.STOCK_PRO, 10) || 0;
+                    if (cant_producto > stockDisponible) {
+                        mostrarAviso("Stock Insuficiente", `La cantidad solicitada (${cant_producto}) excede el stock disponible del producto "${prodSel.DESC_PRO || id_producto}" (${stockDisponible}).`);
+                        return;
+                    }
+                }
+            }
+
             if (id_planta && cant_planta <= 0) {
                 mostrarAviso("Validación de Venta", "La cantidad de la planta debe ser un número entero mayor que 0.");
                 return;
+            }
+
+            if (id_planta) {
+                const plantSel = listaPlantas.find(p => p.ID_PLANTA === id_planta);
+                if (plantSel) {
+                    const stockPlantDisponible = parseInt(plantSel.STOCK_PLANT, 10) || 0;
+                    const nomPlanta = plantSel.NOM_COM || plantSel.NOM_CTFO || id_planta;
+                    if (cant_planta > stockPlantDisponible) {
+                        mostrarAviso("Stock Insuficiente", `La cantidad solicitada (${cant_planta}) excede el stock disponible de la planta "${nomPlanta}" (${stockPlantDisponible}).`);
+                        return;
+                    }
+                }
             }
 
             // Validación RN-29: El saldo pendiente nunca puede ser mayor que el total (CU-30 / N6)

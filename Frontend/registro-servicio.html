@@ -186,6 +186,39 @@
             return (letras ? letras.length : 0) >= 2;
         }
 
+        function esFechaValida(valor) {
+            if (!valor) return false;
+            if (typeof valor !== 'string') return false;
+            const str = valor.trim();
+            if (!str) return false;
+
+            let anio, mes, dia;
+            const matchYMD = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+            const matchDMY = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+
+            if (matchYMD) {
+                anio = parseInt(matchYMD[1], 10);
+                mes = parseInt(matchYMD[2], 10);
+                dia = parseInt(matchYMD[3], 10);
+            } else if (matchDMY) {
+                dia = parseInt(matchDMY[1], 10);
+                mes = parseInt(matchDMY[2], 10);
+                anio = parseInt(matchDMY[3], 10);
+            } else {
+                const d = new Date(str);
+                return !isNaN(d.getTime());
+            }
+
+            if (anio < 1000 || anio > 9999) return false;
+            if (mes < 1 || mes > 12) return false;
+
+            const esBisiesto = (anio % 4 === 0 && (anio % 100 !== 0 || anio % 400 === 0));
+            const diasPorMes = [31, esBisiesto ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+            if (dia < 1 || dia > diasPorMes[mes - 1]) return false;
+
+            return true;
+        }
+
         function guardarServicio(event) {
             event.preventDefault();
             
@@ -207,6 +240,15 @@
                 document.getElementById('textoModal').innerText = "El empleado responsable es obligatorio.";
                 document.getElementById('modalMensaje').style.display = 'flex';
                 return;
+            }
+
+            if (fecha_ejec && fecha_ejec.trim()) {
+                if (!esFechaValida(fecha_ejec.trim())) {
+                    document.getElementById('tituloModal').innerText = "Validación";
+                    document.getElementById('textoModal').innerText = "La fecha del servicio es inválida (debe ser una fecha válida en formato YYYY-MM-DD).";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
             }
 
             let costo = 0;

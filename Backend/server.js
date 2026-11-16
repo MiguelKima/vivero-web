@@ -318,7 +318,13 @@ app.get('/api/proveedores', async (req, res) => {
                 ID_PROV AS "ID_PROV", 
                 NOM_PROV AS "NOM_PROV",
                 COALESCE(TIP_SUM, '') AS "TIP_SUM",
-                COALESCE(RFC_PROV, '') AS "RFC_PROV",
+                COALESCE(
+                    CASE 
+                        WHEN RFC_PROV IS NULL OR TRIM(RFC_PROV) = '' OR UPPER(TRIM(RFC_PROV)) = 'N/A' OR RFC_PROV !~ '^[A-Za-zÑñ&]{3,4}[0-9]{6}[A-Za-z0-9]{3}$' THEN NULL 
+                        ELSE TRIM(RFC_PROV) 
+                    END, 
+                    ''
+                ) AS "RFC_PROV",
                 COALESCE(DIR_PROV, '') AS "DIR_PROV",
                 COALESCE(CON_PROV, '') AS "CON_PROV",
                 COALESCE(PRO_PROV, '') AS "PRO_PROV"
@@ -482,6 +488,13 @@ function responderErrorPostgres(res, err, idPropuesto, mensajePorDefecto, logPre
         return res.status(500).json({ exito: false, error: 'Falta un campo obligatorio' });
     }
 
+    if (codigo === '22008' || codigo === '22007') {
+        return res.status(400).json({ 
+            exito: false, 
+            error: 'La fecha del servicio es inválida (debe ser una fecha válida en formato YYYY-MM-DD).' 
+        });
+    }
+
     return res.status(500).json({ exito: false, error: mensajePorDefecto });
 }
 
@@ -515,6 +528,44 @@ function esCorreoValido(correo) {
     if (!correo || typeof correo !== 'string') return false;
     const limpio = correo.trim();
     return /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(limpio);
+}
+
+// Validador estricto de fecha calendario (E39): YYYY-MM-DD o DD-MM-YYYY
+function esFechaValida(valor) {
+    if (!valor) return false;
+    if (valor instanceof Date) {
+        return !isNaN(valor.getTime());
+    }
+    if (typeof valor !== 'string') return false;
+    const str = valor.trim();
+    if (!str) return false;
+
+    let anio, mes, dia;
+    const matchYMD = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+    const matchDMY = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+
+    if (matchYMD) {
+        anio = parseInt(matchYMD[1], 10);
+        mes = parseInt(matchYMD[2], 10);
+        dia = parseInt(matchYMD[3], 10);
+    } else if (matchDMY) {
+        dia = parseInt(matchDMY[1], 10);
+        mes = parseInt(matchDMY[2], 10);
+        anio = parseInt(matchDMY[3], 10);
+    } else {
+        const d = new Date(str);
+        if (isNaN(d.getTime())) return false;
+        return true;
+    }
+
+    if (anio < 1000 || anio > 9999) return false;
+    if (mes < 1 || mes > 12) return false;
+
+    const esBisiesto = (anio % 4 === 0 && (anio % 100 !== 0 || anio % 400 === 0));
+    const diasPorMes = [31, esBisiesto ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if (dia < 1 || dia > diasPorMes[mes - 1]) return false;
+
+    return true;
 }
 
 // Límite monetario máximo para evitar desbordamiento en NUMERIC(10, 2) (E33)
@@ -1289,23 +1340,26 @@ function normalizarFechaSQL(valor) {
     }
     if (typeof valor === 'string') {
         const str = valor.trim();
-        const matchDMY = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+        const matchDMY = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
         if (matchDMY) {
-            const dia = matchDMY[1].padStart(2, '0');
-            const mes = matchDMY[2].padStart(2, '0');
-            const anio = matchDMY[3];
-            return `${anio}-${mes}-${dia}`;
+            const dia = parseInt(matchDMY[1], 10);
+            const mes = parseInt(matchDMY[2], 10);
+            const anio = parseInt(matchDMY[3], 10);
+            const formatted = `${anio}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+            return esFechaValida(formatted) ? formatted : null;
         }
-        const matchYMD = str.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+        const matchYMD = str.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
         if (matchYMD) {
-            const anio = matchYMD[1];
-            const mes = matchYMD[2].padStart(2, '0');
-            const dia = matchYMD[3].padStart(2, '0');
-            return `${anio}-${mes}-${dia}`;
+            const anio = parseInt(matchYMD[1], 10);
+            const mes = parseInt(matchYMD[2], 10);
+            const dia = parseInt(matchYMD[3], 10);
+            const formatted = `${anio}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+            return esFechaValida(formatted) ? formatted : null;
         }
         const parsed = new Date(str);
         if (!isNaN(parsed.getTime())) {
-            return parsed.toISOString().split('T')[0];
+            const iso = parsed.toISOString().split('T')[0];
+            return esFechaValida(iso) ? iso : null;
         }
     }
     return null;
@@ -1448,7 +1502,25 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
             });
         }
 
-        const fechaNormalizada = normalizarFechaSQL(fechaEntrada) || new Date().toISOString().split('T')[0];
+        let fechaNormalizada;
+        if (fechaEntrada !== undefined && fechaEntrada !== null && String(fechaEntrada).trim() !== '') {
+            const fechaStr = String(fechaEntrada).trim();
+            if (!esFechaValida(fechaStr)) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'La fecha del servicio es inválida (debe ser una fecha válida en formato YYYY-MM-DD).'
+                });
+            }
+            fechaNormalizada = normalizarFechaSQL(fechaStr);
+            if (!fechaNormalizada) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'La fecha del servicio es inválida (debe ser una fecha válida en formato YYYY-MM-DD).'
+                });
+            }
+        } else {
+            fechaNormalizada = new Date().toISOString().split('T')[0];
+        }
 
         const costoEntrada = costo !== undefined ? costo : (costo_serv !== undefined ? costo_serv : req.body?.costo_est);
         let costoFinal = 0;
@@ -1813,9 +1885,13 @@ app.post('/api/ventas', async (req, res) => {
             return res.status(400).json({ exito: false, error: 'Debe seleccionar al menos un producto o una planta.' });
         }
 
+        let descProdSeleccionado = '';
+        let stockProdDisponible = 0;
+        let cantProdFinal = 0;
+
         if (id_producto && typeof id_producto === 'string' && id_producto.trim()) {
-            const proCheck = await pool.query('SELECT COUNT(*) AS "total" FROM PRODUCTOS WHERE ID_PRO = $1', [id_producto.trim()]);
-            if (parseInt(proCheck.rows[0]?.total, 10) === 0) {
+            const proCheck = await pool.query('SELECT ID_PRO, DESC_PRO, STOCK_PRO FROM PRODUCTOS WHERE TRIM(ID_PRO) = TRIM($1)', [id_producto.trim()]);
+            if (proCheck.rows.length === 0) {
                 return res.status(400).json({ exito: false, error: `El producto seleccionado (${id_producto.trim()}) no existe en el sistema.` });
             }
 
@@ -1826,11 +1902,28 @@ app.post('/api/ventas', async (req, res) => {
                     error: 'La cantidad del producto debe ser un número entero mayor que 0.'
                 });
             }
+
+            cantProdFinal = (cant_producto !== undefined && cant_producto !== null && String(cant_producto).trim() !== '') ? cantProdNum : 1;
+            descProdSeleccionado = proCheck.rows[0].DESC_PRO || id_producto.trim();
+            stockProdDisponible = parseInt(proCheck.rows[0].STOCK_PRO, 10);
+            if (isNaN(stockProdDisponible)) stockProdDisponible = 0;
+
+            // Validación E38: Comprobar stock disponible de producto
+            if (cantProdFinal > stockProdDisponible) {
+                return res.status(400).json({
+                    exito: false,
+                    error: `La cantidad solicitada (${cantProdFinal}) excede el stock disponible del producto "${descProdSeleccionado}" (${stockProdDisponible}).`
+                });
+            }
         }
 
+        let nomPlantaSeleccionada = '';
+        let stockPlantDisponible = 0;
+        let cantPlantFinal = 0;
+
         if (id_planta && typeof id_planta === 'string' && id_planta.trim()) {
-            const plantCheck = await pool.query('SELECT COUNT(*) AS "total" FROM PLANTAS WHERE ID_PLANTA = $1', [id_planta.trim()]);
-            if (parseInt(plantCheck.rows[0]?.total, 10) === 0) {
+            const plantCheck = await pool.query('SELECT ID_PLANTA, NOM_COM, NOM_CTFO, STOCK_PLANT FROM PLANTAS WHERE TRIM(ID_PLANTA) = TRIM($1)', [id_planta.trim()]);
+            if (plantCheck.rows.length === 0) {
                 return res.status(400).json({ exito: false, error: `La planta seleccionada (${id_planta.trim()}) no existe en el sistema.` });
             }
 
@@ -1839,6 +1932,19 @@ app.post('/api/ventas', async (req, res) => {
                 return res.status(400).json({
                     exito: false,
                     error: 'La cantidad de la planta debe ser un número entero mayor que 0.'
+                });
+            }
+
+            cantPlantFinal = (cant_planta !== undefined && cant_planta !== null && String(cant_planta).trim() !== '') ? cantPlantNum : 1;
+            nomPlantaSeleccionada = plantCheck.rows[0].NOM_COM || plantCheck.rows[0].NOM_CTFO || id_planta.trim();
+            stockPlantDisponible = parseInt(plantCheck.rows[0].STOCK_PLANT, 10);
+            if (isNaN(stockPlantDisponible)) stockPlantDisponible = 0;
+
+            // Validación E38: Comprobar stock disponible de planta
+            if (cantPlantFinal > stockPlantDisponible) {
+                return res.status(400).json({
+                    exito: false,
+                    error: `La cantidad solicitada (${cantPlantFinal}) excede el stock disponible de la planta "${nomPlantaSeleccionada}" (${stockPlantDisponible}).`
                 });
             }
         }
@@ -1956,18 +2062,55 @@ app.post('/api/ventas', async (req, res) => {
                 }
             }
 
-            await pool.query(`
-                INSERT INTO VENTAS (ID_VEN, ID_CLI, ID_PRO, ID_PLANTA, FECHA_COMP, FORM_PAGO, TOT_PAGO, SALDO_PAGO)
-                VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7)
-            `, [
-                id_venta,
-                id_cliente.trim(),
-                id_producto && id_producto.trim() ? id_producto.trim() : null,
-                id_planta && id_planta.trim() ? id_planta.trim() : null,
-                formaPagoFinal,
-                numTotal,
-                numSaldo
-            ]);
+            try {
+                await pool.query(`
+                    INSERT INTO VENTAS (ID_VEN, ID_CLI, ID_PRO, ID_PLANTA, FECHA_COMP, FORM_PAGO, TOT_PAGO, SALDO_PAGO, NUM_CAN, NUM_CAN_PLANT)
+                    VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8, $9)
+                `, [
+                    id_venta,
+                    id_cliente.trim(),
+                    id_producto && id_producto.trim() ? id_producto.trim() : null,
+                    id_planta && id_planta.trim() ? id_planta.trim() : null,
+                    formaPagoFinal,
+                    numTotal,
+                    numSaldo,
+                    cantProdFinal,
+                    cantPlantFinal
+                ]);
+            } catch (insertErr) {
+                if (insertErr.code === '42703') {
+                    await pool.query(`
+                        INSERT INTO VENTAS (ID_VEN, ID_CLI, ID_PRO, ID_PLANTA, FECHA_COMP, FORM_PAGO, TOT_PAGO, SALDO_PAGO)
+                        VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7)
+                    `, [
+                        id_venta,
+                        id_cliente.trim(),
+                        id_producto && id_producto.trim() ? id_producto.trim() : null,
+                        id_planta && id_planta.trim() ? id_planta.trim() : null,
+                        formaPagoFinal,
+                        numTotal,
+                        numSaldo
+                    ]);
+                } else {
+                    throw insertErr;
+                }
+            }
+
+            // Descontar inventario de producto vendido (E37)
+            if (cantProdFinal > 0 && id_producto && id_producto.trim()) {
+                await pool.query(
+                    'UPDATE PRODUCTOS SET STOCK_PRO = GREATEST(COALESCE(STOCK_PRO, 0) - $1, 0) WHERE TRIM(ID_PRO) = TRIM($2)',
+                    [cantProdFinal, id_producto.trim()]
+                );
+            }
+
+            // Descontar inventario de planta vendida (E37)
+            if (cantPlantFinal > 0 && id_planta && id_planta.trim()) {
+                await pool.query(
+                    'UPDATE PLANTAS SET STOCK_PLANT = GREATEST(COALESCE(STOCK_PLANT, 0) - $1, 0) WHERE TRIM(ID_PLANTA) = TRIM($2)',
+                    [cantPlantFinal, id_planta.trim()]
+                );
+            }
             
             return { 
                 exito: true, 
@@ -1978,8 +2121,8 @@ app.post('/api/ventas', async (req, res) => {
                     forma_pago: formaPagoFinal, 
                     total: numTotal, 
                     saldo: numSaldo, 
-                    cant_producto: cant_producto || 0,
-                    cant_planta: cant_planta || 0,
+                    cant_producto: cantProdFinal,
+                    cant_planta: cantPlantFinal,
                     cajero: cajero || 'Administrador',
                     fecha: new Date().toLocaleString() 
                 }
@@ -2045,7 +2188,13 @@ app.get('/api/dashboard/proveedores', async (req, res) => {
                 ID_PROV AS "ID_PROV", 
                 COALESCE(TIP_SUM, '') AS "TIP_SUM", 
                 NOM_PROV AS "NOM_PROV", 
-                COALESCE(RFC_PROV, '') AS "RFC_PROV", 
+                COALESCE(
+                    CASE 
+                        WHEN RFC_PROV IS NULL OR TRIM(RFC_PROV) = '' OR UPPER(TRIM(RFC_PROV)) = 'N/A' OR RFC_PROV !~ '^[A-Za-zÑñ&]{3,4}[0-9]{6}[A-Za-z0-9]{3}$' THEN NULL 
+                        ELSE TRIM(RFC_PROV) 
+                    END, 
+                    ''
+                ) AS "RFC_PROV", 
                 COALESCE(DIR_PROV, '') AS "DIR_PROV", 
                 COALESCE(CON_PROV, '') AS "CON_PROV", 
                 COALESCE(PRO_PROV, '') AS "PRO_PROV" 
@@ -2707,7 +2856,10 @@ app.get('/api/proveedores/:id', async (req, res) => {
                 ID_PROV AS "ID_PROV", 
                 TIP_SUM AS "TIP_SUM", 
                 NOM_PROV AS "NOM_PROV", 
-                RFC_PROV AS "RFC_PROV", 
+                CASE 
+                    WHEN RFC_PROV IS NULL OR TRIM(RFC_PROV) = '' OR UPPER(TRIM(RFC_PROV)) = 'N/A' OR RFC_PROV !~ '^[A-Za-zÑñ&]{3,4}[0-9]{6}[A-Za-z0-9]{3}$' THEN NULL 
+                    ELSE TRIM(RFC_PROV) 
+                END AS "RFC_PROV", 
                 DIR_PROV AS "DIR_PROV", 
                 COALESCE(CON_PROV, '') AS "CON_PROV", 
                 PRO_PROV AS "PRO_PROV" 
@@ -3661,6 +3813,25 @@ app.put('/api/actualizar', async (req, res) => {
                         valor = conLimpio;
                     }
 
+                    // Validación E39: FECHA_EJEC en SERVICIOS
+                    if (keyUpper === 'FECHA_EJEC' && tabla.toUpperCase() === 'SERVICIOS') {
+                        const fechaStr = String(valor).trim();
+                        if (!esFechaValida(fechaStr)) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: 'La fecha del servicio es inválida (debe ser una fecha válida en formato YYYY-MM-DD).'
+                            });
+                        }
+                        const fNorm = normalizarFechaSQL(fechaStr);
+                        if (!fNorm) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: 'La fecha del servicio es inválida (debe ser una fecha válida en formato YYYY-MM-DD).'
+                            });
+                        }
+                        valor = fNorm;
+                    }
+
                     // Validación E26: ROL en USUARIOS
                     if (keyUpper === 'ROL' && tabla.toUpperCase() === 'USUARIOS') {
                         const ROLES_PERMITIDOS = ['administrador', 'empleado'];
@@ -3775,6 +3946,12 @@ app.put('/api/actualizar', async (req, res) => {
         res.json({ exito: true, mensaje: `Registro actualizado correctamente en ${tabla}` });
     } catch (err) {
         console.error('ERROR AL ACTUALIZAR:', err.message);
+        if (err.code === '22008' || err.code === '22007') {
+            return res.status(400).json({
+                exito: false,
+                error: 'La fecha del servicio es inválida (debe ser una fecha válida en formato YYYY-MM-DD).'
+            });
+        }
         if (err.code === '23505' || (err.message && err.message.toUpperCase().includes('UNIQUE'))) {
             return res.status(400).json({
                 exito: false,
@@ -3935,51 +4112,62 @@ async function procesarEliminacion(req, res, tabla, idColumn, idValue) {
                 const idProd = (ventaParaRestaurar.ID_PRO || ventaParaRestaurar.id_pro || '').trim();
                 if (idProd && idProd.toUpperCase() !== 'N/A' && idProd.toUpperCase() !== 'NULL') {
                     let cantProd = 1;
+                    let tieneColProd = false;
                     for (const k of ['NUM_CAN', 'num_can', 'CANT_PRO', 'cant_pro', 'CANT_PRODUCTO', 'cant_producto', 'NUM_CAN_PRO', 'num_can_pro', 'CANTIDAD', 'cantidad']) {
                         if (ventaParaRestaurar[k] !== undefined && ventaParaRestaurar[k] !== null && String(ventaParaRestaurar[k]).trim() !== '') {
                             const n = parseInt(ventaParaRestaurar[k], 10);
-                            if (!isNaN(n) && n > 0) {
+                            if (!isNaN(n)) {
                                 cantProd = n;
+                                tieneColProd = true;
                                 break;
                             }
                         }
                     }
-                    await pool.query(
-                        'UPDATE PRODUCTOS SET STOCK_PRO = COALESCE(STOCK_PRO, 0) + $1 WHERE TRIM(ID_PRO) = TRIM($2)',
-                        [cantProd, idProd]
-                    );
-                    console.log(`[E20] Stock restaurado para producto ${idProd}: +${cantProd} tras eliminar venta ${idStr}`);
+                    if (!tieneColProd) cantProd = 1;
+                    if (cantProd > 0) {
+                        await pool.query(
+                            'UPDATE PRODUCTOS SET STOCK_PRO = COALESCE(STOCK_PRO, 0) + $1 WHERE TRIM(ID_PRO) = TRIM($2)',
+                            [cantProd, idProd]
+                        );
+                        console.log(`[E20] Stock restaurado para producto ${idProd}: +${cantProd} tras eliminar venta ${idStr}`);
+                    }
                 }
 
                 // 2. Restaurar stock de planta si la venta incluía planta
                 const idPlanta = (ventaParaRestaurar.ID_PLANTA || ventaParaRestaurar.id_planta || '').trim();
                 if (idPlanta && idPlanta.toUpperCase() !== 'N/A' && idPlanta.toUpperCase() !== 'NULL') {
                     let cantPlanta = 1;
+                    let tieneColPlanta = false;
                     for (const k of ['NUM_CAN_PLANT', 'num_can_plant', 'CANT_PLANTA', 'cant_planta', 'CANT_PLANT', 'cant_plant', 'NUM_CAN_PLANTA', 'num_can_planta']) {
                         if (ventaParaRestaurar[k] !== undefined && ventaParaRestaurar[k] !== null && String(ventaParaRestaurar[k]).trim() !== '') {
                             const n = parseInt(ventaParaRestaurar[k], 10);
-                            if (!isNaN(n) && n > 0) {
+                            if (!isNaN(n)) {
                                 cantPlanta = n;
+                                tieneColPlanta = true;
                                 break;
                             }
                         }
                     }
-                    if ((!idProd || idProd.toUpperCase() === 'N/A' || idProd.toUpperCase() === 'NULL') && cantPlanta === 1) {
+                    if (!tieneColPlanta && (!idProd || idProd.toUpperCase() === 'N/A' || idProd.toUpperCase() === 'NULL')) {
                         for (const k of ['CANTIDAD', 'cantidad']) {
                             if (ventaParaRestaurar[k] !== undefined && ventaParaRestaurar[k] !== null && String(ventaParaRestaurar[k]).trim() !== '') {
                                 const n = parseInt(ventaParaRestaurar[k], 10);
-                                if (!isNaN(n) && n > 0) {
+                                if (!isNaN(n)) {
                                     cantPlanta = n;
+                                    tieneColPlanta = true;
                                     break;
                                 }
                             }
                         }
                     }
-                    await pool.query(
-                        'UPDATE PLANTAS SET STOCK_PLANT = COALESCE(STOCK_PLANT, 0) + $1 WHERE TRIM(ID_PLANTA) = TRIM($2)',
-                        [cantPlanta, idPlanta]
-                    );
-                    console.log(`[E20] Stock restaurado para planta ${idPlanta}: +${cantPlanta} tras eliminar venta ${idStr}`);
+                    if (!tieneColPlanta) cantPlanta = 1;
+                    if (cantPlanta > 0) {
+                        await pool.query(
+                            'UPDATE PLANTAS SET STOCK_PLANT = COALESCE(STOCK_PLANT, 0) + $1 WHERE TRIM(ID_PLANTA) = TRIM($2)',
+                            [cantPlanta, idPlanta]
+                        );
+                        console.log(`[E20] Stock restaurado para planta ${idPlanta}: +${cantPlanta} tras eliminar venta ${idStr}`);
+                    }
                 }
             } catch (stockErr) {
                 console.error('[E20] Error al restaurar stock de venta eliminada:', stockErr.message);
@@ -4153,6 +4341,7 @@ async function limpiarDatosInvalidosBaseDatos() {
             UPDATE PROVEEDORES SET DIR_PROV = NULL WHERE DIR_PROV IS NOT NULL AND TRIM(DIR_PROV) = '';
             UPDATE PROVEEDORES SET CON_PROV = NULL WHERE CON_PROV IS NOT NULL AND TRIM(CON_PROV) = '';
             UPDATE PROVEEDORES SET RFC_PROV = NULL WHERE RFC_PROV IS NOT NULL AND TRIM(RFC_PROV) = '';
+            UPDATE PROVEEDORES SET RFC_PROV = NULL WHERE RFC_PROV IS NOT NULL AND (TRIM(RFC_PROV) = '' OR UPPER(TRIM(RFC_PROV)) = 'N/A' OR RFC_PROV !~ '^[A-Za-zÑñ&]{3,4}[0-9]{6}[A-Za-z0-9]{3}$');
             UPDATE PROVEEDORES SET TIP_SUM = NULL WHERE TIP_SUM IS NOT NULL AND TRIM(TIP_SUM) = '';
             UPDATE PROVEEDORES SET PRO_PROV = NULL WHERE PRO_PROV IS NOT NULL AND TRIM(PRO_PROV) = '';
 
@@ -4219,6 +4408,20 @@ async function limpiarDatosInvalidosBaseDatos() {
 
                 IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'chk_nom_cli_no_vacio') THEN
                     ALTER TABLE CLIENTES ADD CONSTRAINT chk_nom_cli_no_vacio CHECK (NOM_CLI IS NOT NULL AND TRIM(NOM_CLI) <> '');
+                END IF;
+
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE lower(table_name) = 'ventas' AND lower(column_name) = 'num_can'
+                ) THEN
+                    ALTER TABLE VENTAS ADD COLUMN NUM_CAN INTEGER DEFAULT 1;
+                END IF;
+
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE lower(table_name) = 'ventas' AND lower(column_name) = 'num_can_plant'
+                ) THEN
+                    ALTER TABLE VENTAS ADD COLUMN NUM_CAN_PLANT INTEGER DEFAULT 1;
                 END IF;
 
                 IF NOT EXISTS (
