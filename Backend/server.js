@@ -339,7 +339,10 @@ app.get('/api/clientes', async (req, res) => {
                 NOM_CLI AS "NOM_CLI", 
                 COALESCE(DIR_CLI, '') AS "DIR_CLI", 
                 COALESCE(TEL_CLI, '') AS "TEL_CLI", 
-                COALESCE(COR_CLI, '') AS "COR_CLI", 
+                CASE 
+                    WHEN COR_CLI IS NULL OR TRIM(COR_CLI) = '' THEN NULL 
+                    ELSE TRIM(COR_CLI) 
+                END AS "COR_CLI", 
                 COALESCE(COM_CLI, '') AS "COM_CLI", 
                 COALESCE(PREF_CLI, '') AS "PREF_CLI" 
             FROM CLIENTES
@@ -1816,7 +1819,10 @@ app.get('/api/dashboard/clientes', async (req, res) => {
                 NOM_CLI AS "NOM_CLI", 
                 COALESCE(DIR_CLI, '') AS "DIR_CLI", 
                 COALESCE(TEL_CLI, '') AS "TEL_CLI", 
-                COALESCE(COR_CLI, '') AS "COR_CLI", 
+                CASE 
+                    WHEN COR_CLI IS NULL OR TRIM(COR_CLI) = '' THEN NULL 
+                    ELSE TRIM(COR_CLI) 
+                END AS "COR_CLI", 
                 COALESCE(COM_CLI, '') AS "COM_CLI", 
                 COALESCE(PREF_CLI, '') AS "PREF_CLI" 
             FROM CLIENTES
@@ -2292,7 +2298,10 @@ app.get('/api/clientes/:id', async (req, res) => {
                 NOM_CLI AS "NOM_CLI", 
                 COALESCE(DIR_CLI, '') AS "DIR_CLI", 
                 COALESCE(TEL_CLI, '') AS "TEL_CLI", 
-                COALESCE(COR_CLI, '') AS "COR_CLI", 
+                CASE 
+                    WHEN COR_CLI IS NULL OR TRIM(COR_CLI) = '' THEN NULL 
+                    ELSE TRIM(COR_CLI) 
+                END AS "COR_CLI", 
                 COALESCE(COM_CLI, '') AS "COM_CLI", 
                 COALESCE(PREF_CLI, '') AS "PREF_CLI" 
             FROM CLIENTES 
@@ -3446,6 +3455,26 @@ async function limpiarDatosInvalidosBaseDatos() {
             WHERE (ID_CLI = 'CLI-026' OR NOM_CLI IS NULL OR TRIM(NOM_CLI) = '')
         `);
 
+        // 1.1 Limpieza de 22 correos inválidos en CLIENTES (E7): poner COR_CLI = NULL
+        // IDs: vacíos CLI-007, CLI-008, CLI-011, CLI-012, CLI-020, CLI-035, CLI-036, CLI-039, CLI-041;
+        // mario.torres@ CLI-028, CLI-029, CLI-034, CLI-043; sin @ CLI-027, CLI-042, CLI-014;
+        // abc@ CLI-006, CLI-010; Maria.torres@ CLI-032; morio.torred@ CLI-033; N/A CLI-001; qa.empleado@correo,com CLI-004.
+        const idsCorreosInvalidosE7 = [
+            'CLI-001', 'CLI-004', 'CLI-006', 'CLI-007', 'CLI-008', 'CLI-010',
+            'CLI-011', 'CLI-012', 'CLI-014', 'CLI-020', 'CLI-027', 'CLI-028',
+            'CLI-029', 'CLI-032', 'CLI-033', 'CLI-034', 'CLI-035', 'CLI-036',
+            'CLI-039', 'CLI-041', 'CLI-042', 'CLI-043'
+        ];
+        const resCorreos = await pool.query(`
+            UPDATE CLIENTES 
+            SET COR_CLI = NULL 
+            WHERE ID_CLI IN (${idsCorreosInvalidosE7.map((_, i) => `$${i + 1}`).join(', ')})
+               OR TRIM(COALESCE(COR_CLI, '')) = ''
+               OR LOWER(TRIM(COR_CLI)) = 'n/a'
+               OR (COR_CLI IS NOT NULL AND COR_CLI NOT LIKE '%@%.%')
+        `, idsCorreosInvalidosE7);
+        console.log(`[Limpieza E7] Correos inválidos en CLIENTES actualizados a NULL: ${resCorreos.rowCount || 0}`);
+
         // 2. EMPLEADOS: Eliminar EMP-013, EMP-019 y empleados con sueldo negativo (RN-16 / N8)
         await pool.query(`
             UPDATE USUARIOS SET ID_EMP = NULL 
@@ -3498,13 +3527,14 @@ async function limpiarDatosInvalidosBaseDatos() {
         const checkSelect = await pool.query(`
             SELECT 
                 (SELECT COUNT(*) FROM CLIENTES WHERE ID_CLI = 'CLI-026' OR NOM_CLI IS NULL OR TRIM(NOM_CLI) = '') AS "clientes_invalidos",
+                (SELECT COUNT(*) FROM CLIENTES WHERE ID_CLI IN (${idsCorreosInvalidosE7.map(id => `'${id}'`).join(', ')}) AND COR_CLI IS NOT NULL) AS "correos_e7_no_nulos",
                 (SELECT COUNT(*) FROM EMPLEADOS WHERE ID_EMP IN ('EMP-013', 'EMP-019') OR SUE_EMP < 0) AS "empleados_invalidos",
                 (SELECT COUNT(*) FROM PRODUCTOS WHERE ID_PRO IN ('PRO-003', 'PRO-005', 'PRO-014', 'PRO-015', 'PRO-018') OR PREC_PRO < 0 OR STOCK_PRO < 0) AS "productos_invalidos",
                 (SELECT COUNT(*) FROM PLANTAS WHERE ID_PLANTA IN ('PLN-014', 'PLN-021', 'PLN-005', 'PLN-004', 'PLN-013', 'PLN-020') OR STOCK_PLANT < 0 OR PREC_PLANTA < 0) AS "plantas_invalidas",
                 (SELECT COUNT(*) FROM CAT_SERVICIOS WHERE ID_CAT_SERV IN ('CSV-010', 'CSV-016') OR COSTO_EST < 0) AS "cat_servicios_invalidos"
         `);
         const v = checkSelect.rows[0];
-        console.log(`[Verificación SELECT post-limpieza] Registros inválidos restantes en BD: CLIENTES: ${v.clientes_invalidos}, EMPLEADOS: ${v.empleados_invalidos}, PRODUCTOS: ${v.productos_invalidos}, PLANTAS: ${v.plantas_invalidas}, CAT_SERVICIOS: ${v.cat_servicios_invalidos}`);
+        console.log(`[Verificación SELECT post-limpieza] Registros inválidos restantes en BD: CLIENTES sin nombre: ${v.clientes_invalidos}, CLIENTES con correo inválido E7: ${v.correos_e7_no_nulos}, EMPLEADOS: ${v.empleados_invalidos}, PRODUCTOS: ${v.productos_invalidos}, PLANTAS: ${v.plantas_invalidas}, CAT_SERVICIOS: ${v.cat_servicios_invalidos}`);
 
         // 6. Restricciones CHECK, 7. AUDITORIA_USUARIOS y 8. Restauración de USR-011
         await pool.query(`
