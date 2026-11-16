@@ -292,11 +292,17 @@ app.get('/api/plantas', async (req, res) => {
                 NOM_CTFO AS "NOM_CTFO", 
                 NOM_COM AS "NOM_COM", 
                 COALESCE(TAM_PLANT, '') AS "TAM_PLANT", 
-                GREATEST(COALESCE(STOCK_PLANT, 0), 0) AS "STOCK_PLANT", 
+                CASE 
+                    WHEN STOCK_PLANT IS NULL THEN NULL 
+                    ELSE GREATEST(STOCK_PLANT, 0) 
+                END AS "STOCK_PLANT", 
                 COALESCE(PROV_PLANT, '') AS "PROV_PLANT", 
-                ROUND(CAST(GREATEST(COALESCE(PREC_PLANTA, 0), 0) AS NUMERIC), 2)::float AS "PREC_PLANTA" 
+                CASE 
+                    WHEN PREC_PLANTA IS NULL THEN NULL 
+                    ELSE ROUND(CAST(GREATEST(PREC_PLANTA, 0) AS NUMERIC), 2)::float 
+                END AS "PREC_PLANTA" 
             FROM PLANTAS
-            WHERE STOCK_PLANT >= 0 AND PREC_PLANTA >= 0
+            WHERE (STOCK_PLANT IS NULL OR STOCK_PLANT >= 0) AND (PREC_PLANTA IS NULL OR PREC_PLANTA >= 0)
         `);
         res.json(result.rows);
     } catch (err) {
@@ -378,9 +384,12 @@ app.get('/api/catalogo-servicios', async (req, res) => {
                 ID_CAT_SERV AS "ID_CAT_SERV", 
                 NOM_SERV AS "NOM_SERV", 
                 COALESCE(DESC_SERV, '') AS "DESC_SERV", 
-                ROUND(CAST(GREATEST(COALESCE(COSTO_EST, 0), 0) AS NUMERIC), 2)::float AS "COSTO_EST" 
+                CASE 
+                    WHEN COSTO_EST IS NULL THEN NULL 
+                    ELSE ROUND(CAST(GREATEST(COSTO_EST, 0) AS NUMERIC), 2)::float 
+                END AS "COSTO_EST" 
             FROM CAT_SERVICIOS
-            WHERE COSTO_EST >= 0
+            WHERE COSTO_EST IS NULL OR COSTO_EST >= 0
         `);
         res.json(result.rows);
     } catch (err) {
@@ -396,11 +405,17 @@ app.get('/api/productos', async (req, res) => {
                 ID_PRO AS "ID_PRO", 
                 COALESCE(TIP_PRO, '') AS "TIP_PRO", 
                 DESC_PRO AS "DESC_PRO", 
-                GREATEST(COALESCE(STOCK_PRO, 0), 0) AS "STOCK_PRO", 
-                ROUND(CAST(GREATEST(COALESCE(PREC_PRO, 0), 0) AS NUMERIC), 2)::float AS "PREC_PRO", 
+                CASE 
+                    WHEN STOCK_PRO IS NULL THEN NULL 
+                    ELSE GREATEST(STOCK_PRO, 0) 
+                END AS "STOCK_PRO", 
+                CASE 
+                    WHEN PREC_PRO IS NULL THEN NULL 
+                    ELSE ROUND(CAST(GREATEST(PREC_PRO, 0) AS NUMERIC), 2)::float 
+                END AS "PREC_PRO", 
                 COALESCE(ID_PROV, '') AS "ID_PROV" 
             FROM PRODUCTOS
-            WHERE PREC_PRO >= 0 AND STOCK_PRO >= 0
+            WHERE (PREC_PRO IS NULL OR PREC_PRO >= 0) AND (STOCK_PRO IS NULL OR STOCK_PRO >= 0)
         `);
         res.json(result.rows);
     } catch (err) {
@@ -1817,11 +1832,17 @@ app.get('/api/dashboard/productos', async (req, res) => {
                 ID_PRO AS "ID_PRO", 
                 COALESCE(TIP_PRO, '') AS "TIP_PRO", 
                 DESC_PRO AS "DESC_PRO", 
-                GREATEST(COALESCE(STOCK_PRO, 0), 0) AS "STOCK_PRO", 
-                ROUND(CAST(GREATEST(COALESCE(PREC_PRO, 0), 0) AS NUMERIC), 2)::float AS "PREC_PRO", 
+                CASE 
+                    WHEN STOCK_PRO IS NULL THEN NULL 
+                    ELSE GREATEST(STOCK_PRO, 0) 
+                END AS "STOCK_PRO", 
+                CASE 
+                    WHEN PREC_PRO IS NULL THEN NULL 
+                    ELSE ROUND(CAST(GREATEST(PREC_PRO, 0) AS NUMERIC), 2)::float 
+                END AS "PREC_PRO", 
                 COALESCE(ID_PROV, '') AS "ID_PROV" 
             FROM PRODUCTOS
-            WHERE PREC_PRO >= 0 AND STOCK_PRO >= 0
+            WHERE (PREC_PRO IS NULL OR PREC_PRO >= 0) AND (STOCK_PRO IS NULL OR STOCK_PRO >= 0)
         `);
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
@@ -1836,14 +1857,35 @@ app.get('/api/dashboard/pedidos', async (req, res) => {
 
 app.get('/api/dashboard/servicios', async (req, res) => {
     try {
-        const result = await pool.query('SELECT ID_SERV AS "ID_SERV", ID_CLI AS "ID_CLI", TRAB_REAL AS "TRAB_REAL", ROUND(CAST(COALESCE(COSTO_SERV, 0) AS NUMERIC), 2)::float AS "COSTO_SERV" FROM SERVICIOS WHERE COSTO_SERV >= 0');
+        const result = await pool.query(`
+            SELECT 
+                ID_SERV AS "ID_SERV", 
+                ID_CLI AS "ID_CLI", 
+                TRAB_REAL AS "TRAB_REAL", 
+                CASE 
+                    WHEN COSTO_SERV IS NULL THEN NULL 
+                    ELSE ROUND(CAST(GREATEST(COSTO_SERV, 0) AS NUMERIC), 2)::float 
+                END AS "COSTO_SERV" 
+            FROM SERVICIOS 
+            WHERE COSTO_SERV IS NULL OR COSTO_SERV >= 0
+        `);
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
 });
 
 app.get('/api/dashboard/catalogo-servicios', async (req, res) => {
     try {
-        const result = await pool.query('SELECT ID_CAT_SERV AS "ID_CAT_SERV", NOM_SERV AS "NOM_SERV", ROUND(CAST(COALESCE(COSTO_EST, 0) AS NUMERIC), 2)::float AS "COSTO_EST" FROM CAT_SERVICIOS WHERE COSTO_EST >= 0');
+        const result = await pool.query(`
+            SELECT 
+                ID_CAT_SERV AS "ID_CAT_SERV", 
+                NOM_SERV AS "NOM_SERV", 
+                CASE 
+                    WHEN COSTO_EST IS NULL THEN NULL 
+                    ELSE ROUND(CAST(GREATEST(COSTO_EST, 0) AS NUMERIC), 2)::float 
+                END AS "COSTO_EST" 
+            FROM CAT_SERVICIOS 
+            WHERE COSTO_EST IS NULL OR COSTO_EST >= 0
+        `);
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
 });
@@ -2421,7 +2463,10 @@ app.get('/api/empleados/:id', async (req, res) => {
                 DIR_EMP AS "DIR_EMP", 
                 PUE_EMP AS "PUE_EMP", 
                 HOR_EMP AS "HOR_EMP", 
-                CAST(COALESCE(SUE_EMP, 0) AS FLOAT) AS "SUE_EMP" 
+                CASE 
+                    WHEN SUE_EMP IS NULL THEN NULL 
+                    ELSE CAST(SUE_EMP AS FLOAT) 
+                END AS "SUE_EMP" 
             FROM EMPLEADOS 
             WHERE ID_EMP = $1
         `, [req.params.id]);
@@ -2526,7 +2571,10 @@ app.get('/api/productos/:id', async (req, res) => {
                 TIP_PRO AS "TIP_PRO", 
                 DESC_PRO AS "DESC_PRO", 
                 STOCK_PRO AS "STOCK_PRO", 
-                CAST(COALESCE(PREC_PRO, 0) AS FLOAT) AS "PREC_PRO", 
+                CASE 
+                    WHEN PREC_PRO IS NULL THEN NULL 
+                    ELSE CAST(PREC_PRO AS FLOAT) 
+                END AS "PREC_PRO", 
                 ID_PROV AS "ID_PROV" 
             FROM PRODUCTOS 
             WHERE ID_PRO = $1
@@ -2644,7 +2692,10 @@ app.get('/api/plantas/:id', async (req, res) => {
                 TAM_PLANT AS "TAM_PLANT", 
                 STOCK_PLANT AS "STOCK_PLANT", 
                 PROV_PLANT AS "PROV_PLANT", 
-                CAST(COALESCE(PREC_PLANTA, 0) AS FLOAT) AS "PREC_PLANTA" 
+                CASE 
+                    WHEN PREC_PLANTA IS NULL THEN NULL 
+                    ELSE CAST(PREC_PLANTA AS FLOAT) 
+                END AS "PREC_PLANTA" 
             FROM PLANTAS 
             WHERE ID_PLANTA = $1
         `, [req.params.id]);
