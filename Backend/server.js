@@ -363,7 +363,10 @@ app.get('/api/empleados', async (req, res) => {
                 NOM_EMP AS "NOM_EMP", 
                 COALESCE(PUE_EMP, '') AS "PUE_EMP",
                 COALESCE(TIP_EMP, '') AS "TIP_EMP",
-                COALESCE(CURP_EMP, '') AS "CURP_EMP",
+                CASE 
+                    WHEN CURP_EMP IS NULL OR TRIM(CURP_EMP) = '' THEN NULL 
+                    ELSE TRIM(CURP_EMP) 
+                END AS "CURP_EMP",
                 COALESCE(DIR_EMP, '') AS "DIR_EMP",
                 COALESCE(HOR_EMP, '') AS "HOR_EMP",
                 CASE 
@@ -492,7 +495,32 @@ function esNombreValido(str) {
     return (letras ? letras.length : 0) >= 2;
 }
 
-// Proveedores (CU-9 / RN-14: Solo NOM_PROV es obligatorio, RFC único solo si se proporciona)
+// Validador de formato de teléfono (E21): 10 dígitos numéricos
+function esTelefonoValido(tel) {
+    if (!tel || typeof tel !== 'string') return false;
+    const digitos = tel.replace(/[\s-]/g, '');
+    return /^\d{10}$/.test(digitos);
+}
+
+// Validador de formato oficial de RFC (E22 / E36):
+// 12 caracteres (persona moral) o 13 caracteres (persona física)
+function esRfcValido(rfc) {
+    if (!rfc || typeof rfc !== 'string') return false;
+    const limpio = rfc.trim().toUpperCase();
+    return /^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/.test(limpio);
+}
+
+// Validador de formato de correo electrónico (E23)
+function esCorreoValido(correo) {
+    if (!correo || typeof correo !== 'string') return false;
+    const limpio = correo.trim();
+    return /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(limpio);
+}
+
+// Límite monetario máximo para evitar desbordamiento en NUMERIC(10, 2) (E33)
+const MAX_MONTO_PERMITIDO = 99999999.99;
+
+// Proveedores (CU-9 / RN-14: Solo NOM_PROV es obligatorio, RFC único solo si se proporciona / E22 / E23 / E32 / E35)
 app.post('/api/proveedores', async (req, res) => {
     let id_prov = null;
     try {
@@ -505,29 +533,58 @@ app.post('/api/proveedores', async (req, res) => {
             });
         }
 
-        const rfcLimpio = rfc_prov && rfc_prov.trim() ? rfc_prov.trim() : null;
+        const nombreLimpio = nom_prov.trim();
 
-        // Validar unicidad del RFC únicamente si fue proporcionado
+        // Validar unicidad del nombre de proveedor (E35)
+        const checkNom = await pool.query(
+            'SELECT COUNT(*) AS "total" FROM PROVEEDORES WHERE TRIM(LOWER(NOM_PROV)) = TRIM(LOWER($1))',
+            [nombreLimpio]
+        );
+        if (parseInt(checkNom.rows[0]?.total, 10) > 0) {
+            return res.status(400).json({ exito: false, error: `El proveedor "${nombreLimpio}" ya se encuentra registrado.` });
+        }
+
+        const rfcLimpio = rfc_prov && typeof rfc_prov === 'string' && rfc_prov.trim() ? rfc_prov.trim().toUpperCase() : null;
+
+        // Validar formato y unicidad del RFC únicamente si fue proporcionado (E22)
         if (rfcLimpio) {
-            const check = await pool.query(`SELECT COUNT(*) AS "total" FROM PROVEEDORES WHERE RFC_PROV = $1`, [rfcLimpio]);
+            if (!esRfcValido(rfcLimpio)) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El formato del RFC es inválido. Debe contener 12 o 13 caracteres alfanuméricos según el formato oficial del SAT (ejemplo: ABC010101XYZ o ABCD010101XYZ).'
+                });
+            }
+            const check = await pool.query(`SELECT COUNT(*) AS "total" FROM PROVEEDORES WHERE UPPER(RFC_PROV) = $1`, [rfcLimpio]);
             if (parseInt(check.rows[0].total) > 0) {
                 return res.status(400).json({ exito: false, error: 'Este proveedor con el mismo RFC ya está registrado.' });
             }
         }
 
+        // Validar formato de correo en contacto si fue proporcionado (E23)
+        const conLimpio = con_prov && typeof con_prov === 'string' && con_prov.trim() ? con_prov.trim() : null;
+        if (conLimpio) {
+            if (!esCorreoValido(conLimpio)) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El contacto del proveedor debe ser un correo electrónico válido (ejemplo: contacto@proveedor.com).'
+                });
+            }
+        }
+
         id_prov = await generarSiguienteId('PROVEEDORES', 'ID_PROV', 'PRV');
 
+        // Guardar NULL en campos opcionales si vienen vacíos o solo espacios (E32)
         await pool.query(`
             INSERT INTO PROVEEDORES (ID_PROV, TIP_SUM, NOM_PROV, RFC_PROV, DIR_PROV, CON_PROV, PRO_PROV)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
         `, [
             id_prov,
-            tip_sum && tip_sum.trim() ? tip_sum.trim() : null,
-            nom_prov.trim(),
+            tip_sum && typeof tip_sum === 'string' && tip_sum.trim() ? tip_sum.trim() : null,
+            nombreLimpio,
             rfcLimpio,
-            dir_prov && dir_prov.trim() ? dir_prov.trim() : null,
-            con_prov && con_prov.trim() ? con_prov.trim() : null,
-            pro_prov && pro_prov.trim() ? pro_prov.trim() : null
+            dir_prov && typeof dir_prov === 'string' && dir_prov.trim() ? dir_prov.trim() : null,
+            conLimpio,
+            pro_prov && typeof pro_prov === 'string' && pro_prov.trim() ? pro_prov.trim() : null
         ]);
 
         res.json({ exito: true, mensaje: `Proveedor registrado con éxito (ID: ${id_prov})` });
@@ -536,7 +593,7 @@ app.post('/api/proveedores', async (req, res) => {
     }
 });
 
-// Clientes (CU-10 / CU-11 / RN-12 / RN-18 / CP-08 / CU-05 FA-02)
+// Clientes (CU-10 / CU-11 / RN-12 / RN-18 / CP-08 / CU-05 FA-02 / E21 / E32)
 app.post('/api/clientes', async (req, res) => {
     let id_cli = null;
     try {
@@ -548,6 +605,18 @@ app.post('/api/clientes', async (req, res) => {
                 error: 'El nombre del cliente es obligatorio, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' 
             });
         }
+
+        // Validación de formato de teléfono (E21)
+        const telLimpio = tel_cli && typeof tel_cli === 'string' && tel_cli.trim() ? tel_cli.trim() : null;
+        if (telLimpio) {
+            if (!esTelefonoValido(telLimpio)) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El teléfono del cliente debe tener un formato válido de 10 dígitos numéricos (ejemplo: 5512345678).'
+                });
+            }
+        }
+        const telFinal = telLimpio ? telLimpio.replace(/[\s-]/g, '') : null;
 
         const correoLimpio = cor_cli && typeof cor_cli === 'string' && cor_cli.trim() ? cor_cli.trim() : null;
 
@@ -583,10 +652,11 @@ app.post('/api/clientes', async (req, res) => {
 
         id_cli = await generarSiguienteId('CLIENTES', 'ID_CLI', 'CLI');
 
-        const comLimpio = com_cli && com_cli.trim() ? sanitizarSqlYHtml(com_cli) : null;
-        const prefLimpio = pref_cli && pref_cli.trim() ? sanitizarSqlYHtml(pref_cli) : null;
-        const dirLimpio = dir_cli && dir_cli.trim() ? sanitizarSqlYHtml(dir_cli) : null;
+        const comLimpio = com_cli && typeof com_cli === 'string' && com_cli.trim() ? sanitizarSqlYHtml(com_cli.trim()) : null;
+        const prefLimpio = pref_cli && typeof pref_cli === 'string' && pref_cli.trim() ? sanitizarSqlYHtml(pref_cli.trim()) : null;
+        const dirLimpio = dir_cli && typeof dir_cli === 'string' && dir_cli.trim() ? sanitizarSqlYHtml(dir_cli.trim()) : null;
 
+        // Guardar NULL en campos opcionales si vienen vacíos o con solo espacios (E32)
         await pool.query(`
             INSERT INTO CLIENTES (ID_CLI, NOM_CLI, DIR_CLI, TEL_CLI, COR_CLI, COM_CLI, PREF_CLI)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -594,7 +664,7 @@ app.post('/api/clientes', async (req, res) => {
             id_cli,
             nombreLimpio,
             dirLimpio && dirLimpio.trim() ? dirLimpio.trim() : null,
-            tel_cli && tel_cli.trim() ? tel_cli.trim() : null,
+            telFinal,
             correoLimpio,
             comLimpio && comLimpio.trim() ? comLimpio.trim() : null,
             prefLimpio && prefLimpio.trim() ? prefLimpio.trim() : null
@@ -748,7 +818,25 @@ app.post('/api/empleados', async (req, res) => {
                     error: 'El sueldo del empleado debe ser mayor o igual a 0 y no puede ser negativo.'
                 });
             }
+            if (numSueldo > MAX_MONTO_PERMITIDO) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El sueldo del empleado excede el límite permitido (máximo 99,999,999.99).'
+                });
+            }
             sueldoFinal = Math.round((numSueldo + Number.EPSILON) * 100) / 100;
+        }
+
+        // Validación de Horario según catálogo de turnos permitidos (E31)
+        const horLimpio = hor_emp && typeof hor_emp === 'string' && hor_emp.trim() ? hor_emp.trim() : null;
+        if (horLimpio) {
+            const turnosValidos = ['matutino', 'vespertino', 'tiempo completo', 'fines de semana', 'nocturno'];
+            if (!turnosValidos.includes(horLimpio.toLowerCase())) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El horario del empleado debe pertenecer a los turnos permitidos: Matutino, Vespertino, Tiempo Completo, Fines de Semana o Nocturno.'
+                });
+            }
         }
 
         curpLimpio = curp_emp && typeof curp_emp === 'string' && curp_emp.trim() ? curp_emp.trim().toUpperCase() : null;
@@ -776,19 +864,32 @@ app.post('/api/empleados', async (req, res) => {
             }
         }
 
+        // Validación de RFC si fue proporcionado en la solicitud (E36)
+        const rfcEmpEntrada = req.body?.rfc_emp || req.body?.rfc || req.body?.RFC || req.body?.RFC_EMP;
+        const rfcEmpLimpio = rfcEmpEntrada && typeof rfcEmpEntrada === 'string' && rfcEmpEntrada.trim() ? rfcEmpEntrada.trim().toUpperCase() : null;
+        if (rfcEmpLimpio) {
+            if (!esRfcValido(rfcEmpLimpio)) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El formato del RFC del empleado es inválido. Debe contener 12 o 13 caracteres alfanuméricos según el formato oficial del SAT (ejemplo: ABC010101XYZ o ABCD010101XYZ).'
+                });
+            }
+        }
+
         id_emp = await generarSiguienteId('EMPLEADOS', 'ID_EMP', 'EMP');
 
+        // Guardar NULL en campos opcionales si vienen vacíos o con solo espacios (E32 / E36)
         await pool.query(`
             INSERT INTO EMPLEADOS (ID_EMP, TIP_EMP, CURP_EMP, NOM_EMP, DIR_EMP, PUE_EMP, HOR_EMP, SUE_EMP, INI_ALTA, FIN_ALTA)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), '2099-12-31')
         `, [
             id_emp,
-            tip_emp && tip_emp.trim() ? tip_emp.trim() : null,
+            tip_emp && typeof tip_emp === 'string' && tip_emp.trim() ? tip_emp.trim() : null,
             curpLimpio,
             nombreLimpio,
-            dir_emp && dir_emp.trim() ? dir_emp.trim() : null,
-            pue_emp && pue_emp.trim() ? pue_emp.trim() : null,
-            hor_emp && hor_emp.trim() ? hor_emp.trim() : null,
+            dir_emp && typeof dir_emp === 'string' && dir_emp.trim() ? dir_emp.trim() : null,
+            pue_emp && typeof pue_emp === 'string' && pue_emp.trim() ? pue_emp.trim() : null,
+            horLimpio,
             sueldoFinal
         ]);
 
@@ -847,7 +948,8 @@ app.post('/api/catalogo-servicios', validacionesCatalogoServicio, async (req, re
         const tienePermiso = await verificarAccesoAdmin(req, res);
         if (!tienePermiso) return;
 
-        const { nom_serv, desc_serv, costo_est } = req.body || {};
+        const { desc_serv, costo_est } = req.body || {};
+        const nom_serv = req.body?.nom_serv || req.body?.NOM_SERV || req.body?.nom_cat_serv || req.body?.NOM_CAT_SERV;
         
         if (!nom_serv || typeof nom_serv !== 'string' || !nom_serv.trim() || !esNombreValido(nom_serv)) {
             return res.status(400).json({ 
@@ -884,11 +986,18 @@ app.post('/api/catalogo-servicios', validacionesCatalogoServicio, async (req, re
                     error: 'El costo estándar debe ser un número mayor o igual a 0 y no puede ser negativo (RN-33).' 
                 });
             }
+            if (numCosto > MAX_MONTO_PERMITIDO) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El costo estándar excede el límite permitido (máximo 99,999,999.99).'
+                });
+            }
             costoFinal = Math.round((numCosto + Number.EPSILON) * 100) / 100;
         }
 
         const descLimpia = desc_serv && typeof desc_serv === 'string' && desc_serv.trim() ? desc_serv.trim() : null;
 
+        // Validar unicidad del nombre de servicio en el catálogo (E35)
         const check = await pool.query(`SELECT COUNT(*) AS "total" FROM CAT_SERVICIOS WHERE TRIM(LOWER(NOM_SERV)) = TRIM(LOWER($1))`, [nombreLimpio]);
         if (parseInt(check.rows[0].total) > 0) {
             return res.status(400).json({ exito: false, error: `El servicio "${nombreLimpio}" ya existe en el catálogo.` });
@@ -933,6 +1042,18 @@ app.post('/api/productos', async (req, res) => {
                     error: 'El precio del producto debe ser mayor o igual a 0 y no puede ser negativo (RN-16).'
                 });
             }
+            if (numPrecio > MAX_MONTO_PERMITIDO) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El precio del producto excede el límite permitido (máximo 99,999,999.99).'
+                });
+            }
+            if (numPrecio > MAX_MONTO_PERMITIDO) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El precio de la planta excede el límite permitido (máximo 99,999,999.99).'
+                });
+            }
             precioFinal = Math.round((numPrecio + Number.EPSILON) * 100) / 100;
         }
 
@@ -954,7 +1075,7 @@ app.post('/api/productos', async (req, res) => {
         }
 
         const descripcionLimpia = desc_pro.trim();
-        const tipoFinal = tip_pro && typeof tip_pro === 'string' && tip_pro.trim() ? tip_pro.trim() : '';
+        const tipoFinal = tip_pro && typeof tip_pro === 'string' && tip_pro.trim() ? tip_pro.trim() : null;
 
         const check = await pool.query(`
             SELECT COUNT(*) AS "total" 
@@ -1055,6 +1176,9 @@ const validacionesPlanta = [
             if (isNaN(n) || n < 0) {
                 throw new Error('El precio de la planta debe ser mayor o igual a 0 (RN-16).');
             }
+            if (n > MAX_MONTO_PERMITIDO) {
+                throw new Error('El precio de la planta excede el límite permitido (máximo 99,999,999.99).');
+            }
             return true;
         })
 ];
@@ -1109,6 +1233,12 @@ app.post('/api/plantas', validacionesPlanta, async (req, res) => {
                 return res.status(400).json({
                     exito: false,
                     error: 'El precio de la planta debe ser un número mayor o igual a 0 (RN-16).'
+                });
+            }
+            if (numPrecio > MAX_MONTO_PERMITIDO) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El precio de la planta excede el límite permitido (máximo 99,999,999.99).'
                 });
             }
             precioFinal = Math.round((numPrecio + Number.EPSILON) * 100) / 100;
@@ -1332,15 +1462,30 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
                     error: 'El costo del servicio debe ser un número mayor o igual a 0 y no puede ser negativo (RN-33).' 
                 });
             }
+            if (numCosto > MAX_MONTO_PERMITIDO) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El costo del servicio excede el límite permitido (máximo 99,999,999.99).'
+                });
+            }
             costoFinal = Math.round((numCosto + Number.EPSILON) * 100) / 100;
         }
 
-        let clienteFinal = idCliEntrada && typeof idCliEntrada === 'string' && idCliEntrada.trim() ? idCliEntrada.trim() : null;
+        // Validación E24 y E33: Cliente obligatorio y comprobación de existencia
+        const clienteFinal = idCliEntrada && typeof idCliEntrada === 'string' && idCliEntrada.trim() ? idCliEntrada.trim() : null;
         if (!clienteFinal) {
-            const cliRes = await pool.query('SELECT ID_CLI AS "ID_CLI" FROM CLIENTES ORDER BY ID_CLI ASC LIMIT 1');
-            if (cliRes.rows.length > 0) {
-                clienteFinal = cliRes.rows[0].ID_CLI;
-            }
+            return res.status(400).json({
+                exito: false,
+                error: 'El cliente es obligatorio (debe seleccionar o proporcionar un cliente para registrar el servicio).'
+            });
+        }
+
+        const cliRes = await pool.query('SELECT 1 FROM CLIENTES WHERE TRIM(ID_CLI) = TRIM($1)', [clienteFinal]);
+        if (cliRes.rows.length === 0) {
+            return res.status(400).json({
+                exito: false,
+                error: `El cliente "${clienteFinal}" especificado no existe.`
+            });
         }
 
         const usuarioSolicitante = obtenerUsuarioSolicitante(req) || req.body?.cajero || req.body?.usuario;
@@ -1357,11 +1502,20 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
             }
         }
 
+        // Validación E24 y E33: Empleado obligatorio y comprobación de existencia
         if (!empleadoFinal) {
-            const empRes = await pool.query('SELECT ID_EMP AS "ID_EMP" FROM EMPLEADOS ORDER BY ID_EMP ASC LIMIT 1');
-            if (empRes.rows.length > 0) {
-                empleadoFinal = empRes.rows[0].ID_EMP;
-            }
+            return res.status(400).json({
+                exito: false,
+                error: 'El empleado es obligatorio (debe seleccionar o proporcionar un empleado para registrar el servicio).'
+            });
+        }
+
+        const empRes = await pool.query('SELECT 1 FROM EMPLEADOS WHERE TRIM(ID_EMP) = TRIM($1)', [empleadoFinal]);
+        if (empRes.rows.length === 0) {
+            return res.status(400).json({
+                exito: false,
+                error: `El empleado "${empleadoFinal}" especificado no existe.`
+            });
         }
 
         id_servicio = id_serv && typeof id_serv === 'string' && id_serv.trim() ? id_serv.trim() : null;
@@ -1411,9 +1565,29 @@ app.post('/api/pedidos', async (req, res) => {
             return res.status(400).json({ exito: false, error: 'El tipo de pedido es obligatorio.' });
         }
 
+        // Validación de catálogo para tipo de pedido (E30)
+        const tiposPedValidos = ['mayoreo', 'menudeo'];
+        if (!tiposPedValidos.includes(tip_ped.trim().toLowerCase())) {
+            return res.status(400).json({
+                exito: false,
+                error: 'El tipo de pedido debe ser una de las opciones permitidas: Mayoreo o Menudeo.'
+            });
+        }
+        const tipPedFinal = tip_ped.trim().toLowerCase() === 'mayoreo' ? 'Mayoreo' : 'Menudeo';
+
         if (!tip_env || typeof tip_env !== 'string' || !tip_env.trim()) {
             return res.status(400).json({ exito: false, error: 'El tipo de envío es obligatorio.' });
         }
+
+        // Validación de catálogo para tipo de envío (E30)
+        const tiposEnvValidos = ['a domicilio', 'recogida en tienda', 'domicilio', 'tienda', 'sucursal'];
+        if (!tiposEnvValidos.includes(tip_env.trim().toLowerCase())) {
+            return res.status(400).json({
+                exito: false,
+                error: 'El tipo de envío debe ser una de las opciones permitidas: A domicilio o Recogida en tienda.'
+            });
+        }
+        const tipEnvFinal = tip_env.trim().toLowerCase().includes('domicilio') ? 'A domicilio' : 'Recogida en tienda';
 
         if (!id_cli || typeof id_cli !== 'string' || !id_cli.trim()) {
             return res.status(400).json({ exito: false, error: 'El cliente es obligatorio.' });
@@ -1435,11 +1609,18 @@ app.post('/api/pedidos', async (req, res) => {
                 });
             }
 
-            const proCheck = await pool.query('SELECT COUNT(*) AS "total" FROM PRODUCTOS WHERE ID_PRO = $1', [idProLimpio]);
-            if (parseInt(proCheck.rows[0].total) === 0) {
+            const proRes = await pool.query('SELECT STOCK_PRO AS "STOCK_PRO", DESC_PRO AS "DESC_PRO" FROM PRODUCTOS WHERE ID_PRO = $1', [idProLimpio]);
+            if (proRes.rows.length === 0) {
                 return res.status(400).json({ 
                     exito: false, 
                     error: `El producto seleccionado (${idProLimpio}) no existe en el sistema (RN-23).` 
+                });
+            }
+            const stockDisponible = proRes.rows[0].STOCK_PRO !== null ? Number(proRes.rows[0].STOCK_PRO) : 0;
+            if (cantNum > stockDisponible) {
+                return res.status(400).json({
+                    exito: false,
+                    error: `La cantidad solicitada (${cantNum}) excede el stock disponible del producto "${proRes.rows[0].DESC_PRO}" (${stockDisponible}).`
                 });
             }
         }
@@ -1453,11 +1634,19 @@ app.post('/api/pedidos', async (req, res) => {
                 });
             }
 
-            const plantaCheck = await pool.query('SELECT COUNT(*) AS "total" FROM PLANTAS WHERE ID_PLANTA = $1', [idPlantaLimpio]);
-            if (parseInt(plantaCheck.rows[0].total) === 0) {
+            const plantaRes = await pool.query('SELECT STOCK_PLANT AS "STOCK_PLANT", NOM_COM AS "NOM_COM", NOM_CTFO AS "NOM_CTFO" FROM PLANTAS WHERE ID_PLANTA = $1', [idPlantaLimpio]);
+            if (plantaRes.rows.length === 0) {
                 return res.status(400).json({ 
                     exito: false, 
                     error: `La planta seleccionada (${idPlantaLimpio}) no existe en el sistema (RN-23).` 
+                });
+            }
+            const stockPlantDisponible = plantaRes.rows[0].STOCK_PLANT !== null ? Number(plantaRes.rows[0].STOCK_PLANT) : 0;
+            if (cantPlantNum > stockPlantDisponible) {
+                const nomPlanta = plantaRes.rows[0].NOM_COM || plantaRes.rows[0].NOM_CTFO || idPlantaLimpio;
+                return res.status(400).json({
+                    exito: false,
+                    error: `La cantidad solicitada (${cantPlantNum}) excede el stock disponible de la planta "${nomPlanta}" (${stockPlantDisponible}).`
                 });
             }
         }
@@ -1528,14 +1717,21 @@ app.post('/api/pedidos', async (req, res) => {
             ? parseFloat(tot_pedido) 
             : totalCalculado;
 
+        if (totalFinal > MAX_MONTO_PERMITIDO) {
+            return res.status(400).json({
+                exito: false,
+                error: 'El total del pedido excede el límite permitido (máximo 99,999,999.99).'
+            });
+        }
+
         await pool.query(`
             INSERT INTO PEDIDOS (ID_PED, TIP_PED, TIP_ENV, DIR_ENVIO, ID_CLI, ID_PRO, NUM_CAN, ID_PLANTA, NUM_CAN_PLANT, ID_REP, TIEM_ENTREGA, TOT_PEDIDO)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         `, [
             id_ped,
-            tip_ped.trim(),
-            tip_env.trim(),
-            dir_envio && dir_envio.trim() ? dir_envio.trim() : null,
+            tipPedFinal,
+            tipEnvFinal,
+            dir_envio && typeof dir_envio === 'string' && dir_envio.trim() ? dir_envio.trim() : null,
             id_cli.trim(),
             idProLimpio,
             cantProFinal,
@@ -1603,15 +1799,26 @@ app.post('/api/ventas', async (req, res) => {
 
         const { id_cliente, id_producto, cant_producto, id_planta, cant_planta, forma_pago, total, saldo, cajero } = req.body || {};
 
-        if (!id_cliente) {
+        if (!id_cliente || typeof id_cliente !== 'string' || !id_cliente.trim()) {
             return res.status(400).json({ exito: false, error: 'Debe seleccionar un cliente para la venta.' });
+        }
+
+        // Prevalidar existencia del cliente para retornar 400 claro (E33)
+        const cliCheck = await pool.query('SELECT COUNT(*) AS "total" FROM CLIENTES WHERE ID_CLI = $1', [id_cliente.trim()]);
+        if (parseInt(cliCheck.rows[0]?.total, 10) === 0) {
+            return res.status(400).json({ exito: false, error: 'El cliente seleccionado no existe en el sistema.' });
         }
 
         if (!id_producto && !id_planta) {
             return res.status(400).json({ exito: false, error: 'Debe seleccionar al menos un producto o una planta.' });
         }
 
-        if (id_producto) {
+        if (id_producto && typeof id_producto === 'string' && id_producto.trim()) {
+            const proCheck = await pool.query('SELECT COUNT(*) AS "total" FROM PRODUCTOS WHERE ID_PRO = $1', [id_producto.trim()]);
+            if (parseInt(proCheck.rows[0]?.total, 10) === 0) {
+                return res.status(400).json({ exito: false, error: `El producto seleccionado (${id_producto.trim()}) no existe en el sistema.` });
+            }
+
             const cantProdNum = Number(cant_producto);
             if (cant_producto !== undefined && cant_producto !== null && (isNaN(cantProdNum) || !Number.isInteger(cantProdNum) || cantProdNum <= 0)) {
                 return res.status(400).json({
@@ -1621,7 +1828,12 @@ app.post('/api/ventas', async (req, res) => {
             }
         }
 
-        if (id_planta) {
+        if (id_planta && typeof id_planta === 'string' && id_planta.trim()) {
+            const plantCheck = await pool.query('SELECT COUNT(*) AS "total" FROM PLANTAS WHERE ID_PLANTA = $1', [id_planta.trim()]);
+            if (parseInt(plantCheck.rows[0]?.total, 10) === 0) {
+                return res.status(400).json({ exito: false, error: `La planta seleccionada (${id_planta.trim()}) no existe en el sistema.` });
+            }
+
             const cantPlantNum = Number(cant_planta);
             if (cant_planta !== undefined && cant_planta !== null && (isNaN(cantPlantNum) || !Number.isInteger(cantPlantNum) || cantPlantNum <= 0)) {
                 return res.status(400).json({
@@ -1631,14 +1843,46 @@ app.post('/api/ventas', async (req, res) => {
             }
         }
 
+        // Validar forma de pago contra catálogo cerrado (E28)
+        const FORMAS_PAGO_PERMITIDAS = ['efectivo', 'tarjeta', 'transferencia'];
+        if (!forma_pago || typeof forma_pago !== 'string' || !forma_pago.trim() || !FORMAS_PAGO_PERMITIDAS.includes(forma_pago.trim().toLowerCase())) {
+            return res.status(400).json({
+                exito: false,
+                error: 'La forma de pago es inválida. Debe ser Efectivo, Tarjeta o Transferencia.'
+            });
+        }
+        const formaPagoLower = forma_pago.trim().toLowerCase();
+        const formaPagoFinal = formaPagoLower === 'efectivo' ? 'Efectivo' : (formaPagoLower === 'tarjeta' ? 'Tarjeta' : 'Transferencia');
+
+        // Validar que total y saldo sean números válidos sin letras (E29 y E33)
+        if (total === undefined || total === null || String(total).trim() === '') {
+            return res.status(400).json({ exito: false, error: 'El total de la venta es obligatorio.' });
+        }
+        const totalRaw = String(total).trim();
+        if (isNaN(Number(totalRaw))) {
+            return res.status(400).json({ exito: false, error: 'El total de la venta debe ser un valor numérico válido.' });
+        }
+
+        const saldoRaw = saldo !== undefined && saldo !== null ? String(saldo).trim() : '0';
+        if (saldoRaw !== '' && isNaN(Number(saldoRaw))) {
+            return res.status(400).json({ exito: false, error: 'El saldo pendiente debe ser un valor numérico válido.' });
+        }
+
         const redondearDinero = (val) => {
             const num = typeof val === 'number' ? val : parseFloat(String(val).trim());
             if (isNaN(num)) return 0;
             return Math.round((num + Number.EPSILON) * 100) / 100;
         };
 
-        const numTotal = redondearDinero(total);
-        const numSaldo = redondearDinero(saldo);
+        const numTotal = redondearDinero(totalRaw);
+        const numSaldo = saldoRaw === '' ? 0 : redondearDinero(saldoRaw);
+
+        if (numTotal > MAX_MONTO_PERMITIDO || numSaldo > MAX_MONTO_PERMITIDO) {
+            return res.status(400).json({
+                exito: false,
+                error: 'El monto excede el límite permitido (máximo 99,999,999.99).'
+            });
+        }
 
         // Validación N2: El total de la venta debe ser mayor a 0 (no se permiten ventas con total $0.00)
         if (numTotal <= 0) {
@@ -1665,7 +1909,7 @@ app.post('/api/ventas', async (req, res) => {
         const idempotencyKey = req.headers['idempotency-key'] || req.body?.idempotency_key;
         claveVenta = idempotencyKey 
             ? String(idempotencyKey).trim() 
-            : `${id_cliente}_${id_producto || ''}_${cant_producto || 0}_${id_planta || ''}_${cant_planta || 0}_${numTotal}_${numSaldo}_${forma_pago || ''}`;
+            : `${id_cliente}_${id_producto || ''}_${cant_producto || 0}_${id_planta || ''}_${cant_planta || 0}_${numTotal}_${numSaldo}_${formaPagoFinal}`;
 
         if (ventasRecientes.has(claveVenta)) {
             const registro = ventasRecientes.get(claveVenta);
@@ -1720,7 +1964,7 @@ app.post('/api/ventas', async (req, res) => {
                 id_cliente.trim(),
                 id_producto && id_producto.trim() ? id_producto.trim() : null,
                 id_planta && id_planta.trim() ? id_planta.trim() : null,
-                forma_pago ? forma_pago.trim() : 'Efectivo',
+                formaPagoFinal,
                 numTotal,
                 numSaldo
             ]);
@@ -1731,7 +1975,7 @@ app.post('/api/ventas', async (req, res) => {
                 ticket: { 
                     id_venta, 
                     id_cliente, 
-                    forma_pago, 
+                    forma_pago: formaPagoFinal, 
                     total: numTotal, 
                     saldo: numSaldo, 
                     cant_producto: cant_producto || 0,
@@ -1838,7 +2082,10 @@ app.get('/api/dashboard/empleados', async (req, res) => {
             SELECT 
                 ID_EMP AS "ID_EMP", 
                 COALESCE(TIP_EMP, '') AS "TIP_EMP", 
-                COALESCE(CURP_EMP, '') AS "CURP_EMP", 
+                CASE 
+                    WHEN CURP_EMP IS NULL OR TRIM(CURP_EMP) = '' THEN NULL 
+                    ELSE TRIM(CURP_EMP) 
+                END AS "CURP_EMP", 
                 NOM_EMP AS "NOM_EMP", 
                 COALESCE(DIR_EMP, '') AS "DIR_EMP", 
                 COALESCE(PUE_EMP, '') AS "PUE_EMP", 
@@ -1968,6 +2215,14 @@ app.post('/api/usuarios', async (req, res) => {
             return res.status(400).json({ exito: false, error: 'El nombre de usuario es obligatorio, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' });
         }
 
+        // El nombre de usuario no puede contener espacios en blanco (E27)
+        if (/\s/.test(username)) {
+            return res.status(400).json({
+                exito: false,
+                error: 'El nombre de usuario no puede contener espacios (E27).'
+            });
+        }
+
         usernameLimpio = username.trim();
 
         if (usernameLimpio.length > 80) {
@@ -1981,9 +2236,27 @@ app.post('/api/usuarios', async (req, res) => {
             return res.status(400).json({ exito: false, error: 'La contraseña es obligatoria.' });
         }
 
+        // Longitud mínima de contraseña: al menos 4 caracteres (E25)
+        if (password.trim().length < 4) {
+            return res.status(400).json({
+                exito: false,
+                error: 'La contraseña debe tener una longitud mínima de 4 caracteres (E25).'
+            });
+        }
+
         if (!rol || typeof rol !== 'string' || !rol.trim()) {
             return res.status(400).json({ exito: false, error: 'El rol del usuario es obligatorio.' });
         }
+
+        // Validar rol contra catálogo cerrado (E26)
+        const ROLES_PERMITIDOS = ['administrador', 'empleado'];
+        if (!ROLES_PERMITIDOS.includes(rol.trim().toLowerCase())) {
+            return res.status(400).json({
+                exito: false,
+                error: 'El rol de usuario es inválido. Debe ser Administrador o Empleado (E26).'
+            });
+        }
+        const rolFinal = rol.trim().toLowerCase() === 'administrador' ? 'Administrador' : 'Empleado';
 
         const check = await pool.query(`SELECT COUNT(*) AS "total" FROM USUARIOS WHERE TRIM(LOWER(USERNAME)) = TRIM(LOWER($1))`, [usernameLimpio]);
         if (parseInt(check.rows[0].total) > 0) {
@@ -2061,9 +2334,9 @@ app.post('/api/usuarios', async (req, res) => {
                 await pool.query(`
                     INSERT INTO USUARIOS (ID_USUARIO, USERNAME, PASSWORD, ROL, ID_EMP, ESTADO)
                     VALUES ($1, $2, $3, $4, $5, 'Activo')
-                `, [id_usuario, usernameLimpio, passwordHash, rol.trim(), idEmpFinal]);
+                `, [id_usuario, usernameLimpio, passwordHash, rolFinal, idEmpFinal]);
                 insertExitoso = true;
-                await registrarAuditoria(req, 'CREAR', id_usuario, null, { username: usernameLimpio, rol: rol.trim(), id_emp: idEmpFinal });
+                await registrarAuditoria(req, 'CREAR', id_usuario, null, { username: usernameLimpio, rol: rolFinal, id_emp: idEmpFinal });
             } catch (insertErr) {
                 const esColisionId = insertErr.code === '23505' && (
                     (insertErr.constraint && insertErr.constraint.toLowerCase().includes('pkey')) ||
@@ -2176,6 +2449,15 @@ app.put('/api/usuarios/:id', async (req, res) => {
             if (!usernameVal || typeof usernameVal !== 'string' || !usernameVal.trim() || !esNombreValido(usernameVal)) {
                 return res.status(400).json({ exito: false, error: 'El nombre de usuario no puede estar vacío, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' });
             }
+
+            // El nombre de usuario no puede contener espacios en blanco (E27)
+            if (/\s/.test(usernameVal)) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El nombre de usuario no puede contener espacios (E27).'
+                });
+            }
+
             usernameLimpio = usernameVal.trim();
 
             if (usernameLimpio.length > 80) {
@@ -2200,6 +2482,27 @@ app.put('/api/usuarios/:id', async (req, res) => {
             }
         }
 
+        if (passwordVal !== undefined && passwordVal !== null && String(passwordVal).trim() !== '') {
+            if (String(passwordVal).trim().length < 4) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'La contraseña debe tener una longitud mínima de 4 caracteres (E25).'
+                });
+            }
+        }
+
+        let rolFinalVal = null;
+        if (rolVal !== undefined && rolVal !== null && String(rolVal).trim() !== '') {
+            const ROLES_PERMITIDOS = ['administrador', 'empleado'];
+            if (!ROLES_PERMITIDOS.includes(String(rolVal).trim().toLowerCase())) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El rol de usuario es inválido. Debe ser Administrador o Empleado (E26).'
+                });
+            }
+            rolFinalVal = String(rolVal).trim().toLowerCase() === 'administrador' ? 'Administrador' : 'Empleado';
+        }
+
         if (idEmpVal !== undefined && idEmpVal && typeof idEmpVal === 'string' && idEmpVal.trim()) {
             const empCheck = await pool.query('SELECT COUNT(*) AS "total" FROM EMPLEADOS WHERE ID_EMP = $1', [idEmpVal.trim()]);
             if (parseInt(empCheck.rows[0].total) === 0) {
@@ -2220,9 +2523,9 @@ app.put('/api/usuarios/:id', async (req, res) => {
             updates.push(`PASSWORD = $${paramIdx++}`);
             values.push(passHash);
         }
-        if (rolVal !== undefined && rolVal && typeof rolVal === 'string' && rolVal.trim()) {
+        if (rolFinalVal !== null) {
             updates.push(`ROL = $${paramIdx++}`);
-            values.push(rolVal.trim());
+            values.push(rolFinalVal);
         }
         if (idEmpVal !== undefined) {
             let finalEmp = null;
@@ -2342,6 +2645,16 @@ app.put('/api/clientes/:id', async (req, res) => {
             }
         }
 
+        if (tel_cli_val !== undefined && tel_cli_val !== null && String(tel_cli_val).trim() !== '') {
+            const telTrim = String(tel_cli_val).trim();
+            if (!esTelefonoValido(telTrim)) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El teléfono debe contener exactamente 10 dígitos numéricos (ejemplo: 5512345678).'
+                });
+            }
+        }
+
         let updates = [];
         let values = [];
         let paramIdx = 1;
@@ -2356,8 +2669,9 @@ app.put('/api/clientes/:id', async (req, res) => {
             values.push(dirLimpio && dirLimpio.trim() ? dirLimpio.trim() : null);
         }
         if (tel_cli_val !== undefined) {
+            const telTrim = tel_cli_val && String(tel_cli_val).trim() ? String(tel_cli_val).replace(/[\s-]/g, '') : null;
             updates.push(`TEL_CLI = $${paramIdx++}`);
-            values.push(tel_cli_val && String(tel_cli_val).trim() ? String(tel_cli_val).trim() : null);
+            values.push(telTrim && telTrim.trim() ? telTrim.trim() : null);
         }
         if (cor_cli_val !== undefined) {
             updates.push(`COR_CLI = $${paramIdx++}`);
@@ -2426,8 +2740,44 @@ app.put('/api/proveedores/:id', async (req, res) => {
         const con_prov_val = con_prov !== undefined ? con_prov : (correo !== undefined ? correo : (req.body?.CON_PROV !== undefined ? req.body?.CON_PROV : req.body?.COR_PROV));
         const pro_prov_val = pro_prov !== undefined ? pro_prov : req.body?.PRO_PROV;
 
-        if (nom_prov_val !== undefined && (!nom_prov_val || typeof nom_prov_val !== 'string' || !nom_prov_val.trim() || !esNombreValido(nom_prov_val))) {
-            return res.status(400).json({ exito: false, error: 'El nombre del proveedor no puede estar vacío, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' });
+        if (nom_prov_val !== undefined) {
+            if (!nom_prov_val || typeof nom_prov_val !== 'string' || !nom_prov_val.trim() || !esNombreValido(nom_prov_val)) {
+                return res.status(400).json({ exito: false, error: 'El nombre del proveedor no puede estar vacío, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' });
+            }
+            // Validar unicidad del nombre de proveedor al actualizar (E35)
+            const checkNom = await pool.query(
+                'SELECT COUNT(*) AS "total" FROM PROVEEDORES WHERE TRIM(LOWER(NOM_PROV)) = TRIM(LOWER($1)) AND ID_PROV != $2',
+                [nom_prov_val.trim(), id_prov]
+            );
+            if (parseInt(checkNom.rows[0]?.total, 10) > 0) {
+                return res.status(400).json({ exito: false, error: `El proveedor "${nom_prov_val.trim()}" ya se encuentra registrado.` });
+            }
+        }
+
+        let rfcLimpio = null;
+        if (rfc_prov_val !== undefined && rfc_prov_val !== null && String(rfc_prov_val).trim() !== '') {
+            rfcLimpio = String(rfc_prov_val).trim().toUpperCase();
+            if (!esRfcValido(rfcLimpio)) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El formato del RFC es inválido. Debe contener 12 o 13 caracteres alfanuméricos según el formato oficial del SAT (ejemplo: ABC010101XYZ o ABCD010101XYZ).'
+                });
+            }
+            const checkRfc = await pool.query('SELECT COUNT(*) AS "total" FROM PROVEEDORES WHERE UPPER(RFC_PROV) = $1 AND ID_PROV != $2', [rfcLimpio, id_prov]);
+            if (parseInt(checkRfc.rows[0]?.total, 10) > 0) {
+                return res.status(400).json({ exito: false, error: 'Este proveedor con el mismo RFC ya está registrado.' });
+            }
+        }
+
+        let conLimpio = null;
+        if (con_prov_val !== undefined && con_prov_val !== null && String(con_prov_val).trim() !== '') {
+            conLimpio = String(con_prov_val).trim();
+            if (!esCorreoValido(conLimpio)) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El contacto del proveedor debe ser un correo electrónico válido (ejemplo: contacto@proveedor.com).'
+                });
+            }
         }
 
         let updates = [];
@@ -2444,7 +2794,7 @@ app.put('/api/proveedores/:id', async (req, res) => {
         }
         if (rfc_prov_val !== undefined) {
             updates.push(`RFC_PROV = $${paramIdx++}`);
-            values.push(rfc_prov_val && String(rfc_prov_val).trim() ? String(rfc_prov_val).trim() : null);
+            values.push(rfcLimpio);
         }
         if (dir_prov_val !== undefined) {
             updates.push(`DIR_PROV = $${paramIdx++}`);
@@ -2452,7 +2802,7 @@ app.put('/api/proveedores/:id', async (req, res) => {
         }
         if (con_prov_val !== undefined) {
             updates.push(`CON_PROV = $${paramIdx++}`);
-            values.push(con_prov_val && String(con_prov_val).trim() ? String(con_prov_val).trim() : null);
+            values.push(conLimpio);
         }
         if (pro_prov_val !== undefined) {
             updates.push(`PRO_PROV = $${paramIdx++}`);
@@ -2559,14 +2909,55 @@ app.put('/api/empleados/:id', async (req, res) => {
             values.push(pue_emp_val && String(pue_emp_val).trim() ? String(pue_emp_val).trim() : null);
         }
         if (hor_emp_val !== undefined) {
+            const horTrim = hor_emp_val !== null ? String(hor_emp_val).trim() : '';
+            let horFinal = null;
+            if (horTrim !== '') {
+                const TURNOS_PERMITIDOS = ['matutino', 'vespertino', 'tiempo completo', 'fines de semana', 'nocturno'];
+                if (!TURNOS_PERMITIDOS.includes(horTrim.toLowerCase())) {
+                    return res.status(400).json({
+                        exito: false,
+                        error: 'El horario debe corresponder a un turno válido: Matutino, Vespertino, Tiempo Completo, Fines de Semana o Nocturno.'
+                    });
+                }
+                const mapTurnos = {
+                    'matutino': 'Matutino',
+                    'vespertino': 'Vespertino',
+                    'tiempo completo': 'Tiempo Completo',
+                    'fines de semana': 'Fines de Semana',
+                    'nocturno': 'Nocturno'
+                };
+                horFinal = mapTurnos[horTrim.toLowerCase()];
+            }
             updates.push(`HOR_EMP = $${paramIdx++}`);
-            values.push(hor_emp_val && String(hor_emp_val).trim() ? String(hor_emp_val).trim() : null);
+            values.push(horFinal);
         }
         if (sue_emp_val !== undefined) {
-            const numSueldo = typeof sue_emp_val === 'number' ? sue_emp_val : parseFloat(String(sue_emp_val).replace(/[^0-9.-]/g, ''));
-            if (!isNaN(numSueldo) && numSueldo >= 0) {
+            if (sue_emp_val !== null && String(sue_emp_val).trim() !== '') {
+                const rawStr = String(sue_emp_val).trim();
+                if (isNaN(Number(rawStr))) {
+                    return res.status(400).json({
+                        exito: false,
+                        error: 'El sueldo del empleado debe ser un valor numérico válido.'
+                    });
+                }
+                const numSueldo = Number(rawStr);
+                if (numSueldo < 0) {
+                    return res.status(400).json({
+                        exito: false,
+                        error: 'El sueldo del empleado debe ser mayor o igual a 0.'
+                    });
+                }
+                if (numSueldo > MAX_MONTO_PERMITIDO) {
+                    return res.status(400).json({
+                        exito: false,
+                        error: 'El sueldo excede el límite permitido (máximo 99,999,999.99).'
+                    });
+                }
                 updates.push(`SUE_EMP = $${paramIdx++}`);
-                values.push(numSueldo);
+                values.push(Math.round((numSueldo + Number.EPSILON) * 100) / 100);
+            } else {
+                updates.push(`SUE_EMP = $${paramIdx++}`);
+                values.push(null);
             }
         }
 
@@ -2633,6 +3024,12 @@ app.put('/api/productos/:id', async (req, res) => {
                 return res.status(400).json({
                     exito: false,
                     error: 'El precio del producto debe ser mayor o igual a 0 y no puede ser negativo (RN-16).'
+                });
+            }
+            if (numPrecio > MAX_MONTO_PERMITIDO) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El precio del producto excede el límite permitido (máximo 99,999,999.99).'
                 });
             }
         }
@@ -2769,6 +3166,12 @@ app.put('/api/plantas/:id', async (req, res) => {
                 return res.status(400).json({
                     exito: false,
                     error: 'El precio de la planta debe ser mayor o igual a 0 y no puede ser negativo (RN-16).'
+                });
+            }
+            if (numPrecio > MAX_MONTO_PERMITIDO) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El precio de la planta excede el límite permitido (máximo 99,999,999.99).'
                 });
             }
         }
@@ -3162,8 +3565,12 @@ app.put('/api/actualizar', async (req, res) => {
         for (const key of Object.keys(campos || {})) {
             if (key !== idColumn && /^[a-zA-Z0-9_]+$/.test(key)) {
                 let valor = campos[key];
-                // Sanitizar y redondear campos monetarios para evitar residuos de flotantes (N6)
-                if (valor !== '' && valor !== null && valor !== undefined) {
+                // Si el valor es string y tras trim() queda vacío, convertir a NULL (E32)
+                if (typeof valor === 'string' && valor.trim() === '') {
+                    valor = null;
+                }
+
+                if (valor !== null && valor !== undefined) {
                     const keyUpper = key.toUpperCase();
                     // Validación compartida de nombres (E15 / N1): mínimo 2 caracteres y al menos 2 letras
                     if (['NOM_PROV', 'NOM_CLI', 'NOM_EMP', 'DESC_PRO', 'NOM_CTFO', 'NOM_COM', 'NOM_SERV', 'TRAB_REAL', 'USERNAME'].includes(keyUpper)) {
@@ -3174,18 +3581,155 @@ app.put('/api/actualizar', async (req, res) => {
                             });
                         }
                     }
-                    if (keyUpper.includes('PREC') || keyUpper.includes('COSTO') || keyUpper.includes('TOT') || keyUpper.includes('SUE') || keyUpper.includes('SALDO')) {
-                        const numVal = parseFloat(valor);
-                        if (!isNaN(numVal)) {
-                            if ((keyUpper.includes('PREC') || keyUpper.includes('COSTO') || keyUpper.includes('SUE')) && numVal < 0) {
-                                return res.status(400).json({
-                                    exito: false,
-                                    error: `El campo ${key} no puede ser un valor negativo (debe ser mayor o igual a 0).`
-                                });
-                            }
-                            valor = Math.round((numVal + Number.EPSILON) * 100) / 100;
+
+                    // Validación E27: USERNAME sin espacios
+                    if (keyUpper === 'USERNAME') {
+                        if (/\s/.test(String(valor))) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: 'El nombre de usuario no puede contener espacios (E27).'
+                            });
                         }
                     }
+
+                    // Validación E35: Nombres únicos en PROVEEDORES y CAT_SERVICIOS
+                    if (keyUpper === 'NOM_PROV' && tabla.toUpperCase() === 'PROVEEDORES') {
+                        const checkNom = await pool.query(
+                            `SELECT COUNT(*) AS "total" FROM PROVEEDORES WHERE TRIM(LOWER(NOM_PROV)) = TRIM(LOWER($1)) AND ${idColumn} != $2`,
+                            [String(valor).trim(), String(idValue)]
+                        );
+                        if (parseInt(checkNom.rows[0]?.total, 10) > 0) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: `El proveedor "${String(valor).trim()}" ya se encuentra registrado (E35).`
+                            });
+                        }
+                    }
+
+                    if (keyUpper === 'NOM_SERV' && tabla.toUpperCase() === 'CAT_SERVICIOS') {
+                        const checkNom = await pool.query(
+                            `SELECT COUNT(*) AS "total" FROM CAT_SERVICIOS WHERE TRIM(LOWER(NOM_SERV)) = TRIM(LOWER($1)) AND ${idColumn} != $2`,
+                            [String(valor).trim(), String(idValue)]
+                        );
+                        if (parseInt(checkNom.rows[0]?.total, 10) > 0) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: `El servicio de catálogo "${String(valor).trim()}" ya se encuentra registrado (E35).`
+                            });
+                        }
+                    }
+
+                    // Validación E21: TEL_CLI en CLIENTES
+                    if (keyUpper === 'TEL_CLI' && tabla.toUpperCase() === 'CLIENTES') {
+                        if (!esTelefonoValido(String(valor))) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: 'El teléfono debe contener exactamente 10 dígitos numéricos (ejemplo: 5512345678).'
+                            });
+                        }
+                        valor = String(valor).replace(/[\s-]/g, '');
+                    }
+
+                    // Validación E22: RFC_PROV en PROVEEDORES
+                    if (keyUpper === 'RFC_PROV' && tabla.toUpperCase() === 'PROVEEDORES') {
+                        const rfcLimpio = String(valor).trim().toUpperCase();
+                        if (!esRfcValido(rfcLimpio)) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: 'El formato del RFC es inválido. Debe contener 12 o 13 caracteres alfanuméricos según el formato oficial del SAT (ejemplo: ABC010101XYZ o ABCD010101XYZ).'
+                            });
+                        }
+                        const checkRfc = await pool.query(
+                            `SELECT COUNT(*) AS "total" FROM PROVEEDORES WHERE UPPER(RFC_PROV) = $1 AND ${idColumn} != $2`,
+                            [rfcLimpio, String(idValue)]
+                        );
+                        if (parseInt(checkRfc.rows[0]?.total, 10) > 0) {
+                            return res.status(400).json({ exito: false, error: 'Este proveedor con el mismo RFC ya está registrado.' });
+                        }
+                        valor = rfcLimpio;
+                    }
+
+                    // Validación E23: CON_PROV en PROVEEDORES
+                    if ((keyUpper === 'CON_PROV' || keyUpper === 'COR_PROV') && tabla.toUpperCase() === 'PROVEEDORES') {
+                        const conLimpio = String(valor).trim();
+                        if (!esCorreoValido(conLimpio)) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: 'El contacto del proveedor debe ser un correo electrónico válido (ejemplo: contacto@proveedor.com).'
+                            });
+                        }
+                        valor = conLimpio;
+                    }
+
+                    // Validación E26: ROL en USUARIOS
+                    if (keyUpper === 'ROL' && tabla.toUpperCase() === 'USUARIOS') {
+                        const ROLES_PERMITIDOS = ['administrador', 'empleado'];
+                        if (!ROLES_PERMITIDOS.includes(String(valor).trim().toLowerCase())) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: 'El rol de usuario es inválido. Debe ser Administrador o Empleado (E26).'
+                            });
+                        }
+                        valor = String(valor).trim().toLowerCase() === 'administrador' ? 'Administrador' : 'Empleado';
+                    }
+
+                    // Validación E28: FORM_PAGO en VENTAS
+                    if ((keyUpper === 'FORM_PAGO' || keyUpper === 'FORMA_PAGO') && tabla.toUpperCase() === 'VENTAS') {
+                        const FORMAS_PAGO_PERMITIDAS = ['efectivo', 'tarjeta', 'transferencia'];
+                        if (!FORMAS_PAGO_PERMITIDAS.includes(String(valor).trim().toLowerCase())) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: 'La forma de pago es inválida. Debe ser Efectivo, Tarjeta o Transferencia (E28).'
+                            });
+                        }
+                        const fLower = String(valor).trim().toLowerCase();
+                        valor = fLower === 'efectivo' ? 'Efectivo' : (fLower === 'tarjeta' ? 'Tarjeta' : 'Transferencia');
+                    }
+
+                    // Validación E31: HOR_EMP en EMPLEADOS
+                    if (keyUpper === 'HOR_EMP' && tabla.toUpperCase() === 'EMPLEADOS') {
+                        const TURNOS_PERMITIDOS = ['matutino', 'vespertino', 'tiempo completo', 'fines de semana', 'nocturno'];
+                        if (!TURNOS_PERMITIDOS.includes(String(valor).trim().toLowerCase())) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: 'El horario debe corresponder a un turno válido: Matutino, Vespertino, Tiempo Completo, Fines de Semana o Nocturno (E31).'
+                            });
+                        }
+                        const mapTurnos = {
+                            'matutino': 'Matutino',
+                            'vespertino': 'Vespertino',
+                            'tiempo completo': 'Tiempo Completo',
+                            'fines de semana': 'Fines de Semana',
+                            'nocturno': 'Nocturno'
+                        };
+                        valor = mapTurnos[String(valor).trim().toLowerCase()];
+                    }
+
+                    // Validación monetaria E29 y E33
+                    if (keyUpper.includes('PREC') || keyUpper.includes('COSTO') || keyUpper.includes('TOT') || keyUpper.includes('SUE') || keyUpper.includes('SALDO')) {
+                        const rawStr = String(valor).trim();
+                        if (isNaN(Number(rawStr))) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: `El campo ${key} debe ser un valor numérico válido (E29).`
+                            });
+                        }
+                        const numVal = parseFloat(rawStr);
+                        if ((keyUpper.includes('PREC') || keyUpper.includes('COSTO') || keyUpper.includes('SUE') || keyUpper.includes('SALDO')) && numVal < 0) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: `El campo ${key} no puede ser un valor negativo (debe ser mayor o igual a 0).`
+                            });
+                        }
+                        if (numVal > MAX_MONTO_PERMITIDO) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: `El campo ${key} excede el límite permitido (máximo 99,999,999.99).`
+                            });
+                        }
+                        valor = Math.round((numVal + Number.EPSILON) * 100) / 100;
+                    }
+
                     // Validación de stock mayor o igual a 0
                     if (keyUpper.includes('STOCK')) {
                         const numStock = Number(valor);
@@ -3197,12 +3741,22 @@ app.put('/api/actualizar', async (req, res) => {
                         }
                         valor = numStock;
                     }
-                    // Cifrado criptográfico de contraseñas si se actualizan desde el panel (RN-41 / N10)
-                    if (keyUpper === 'PASSWORD' && !esPasswordHasheada(String(valor))) {
-                        valor = hashearPassword(String(valor).trim());
+
+                    // Cifrado criptográfico de contraseñas y validación de longitud (E25 / RN-41 / N10)
+                    if (keyUpper === 'PASSWORD') {
+                        if (!esPasswordHasheada(String(valor))) {
+                            if (String(valor).trim().length < 4) {
+                                return res.status(400).json({
+                                    exito: false,
+                                    error: 'La contraseña debe tener una longitud mínima de 4 caracteres (E25).'
+                                });
+                            }
+                            valor = hashearPassword(String(valor).trim());
+                        }
                     }
                 }
-                values.push(valor !== '' && valor !== null && valor !== undefined ? valor : null);
+
+                values.push(valor);
                 setQuery.push(`${key} = $${index}`);
                 index++;
             }
@@ -3587,6 +4141,37 @@ async function limpiarDatosInvalidosBaseDatos() {
             WHERE ID_CAT_SERV IN ('CSV-010', 'CSV-016') OR COSTO_EST < 0
         `);
         await pool.query(`UPDATE CAT_SERVICIOS SET COSTO_EST = 0 WHERE COSTO_EST < 0`);
+
+        // 5.1 Limpieza E32: Convertir cadenas vacías o con solo espacios a NULL en campos opcionales de todas las tablas
+        await pool.query(`
+            UPDATE CLIENTES SET TEL_CLI = NULL WHERE TEL_CLI IS NOT NULL AND TRIM(TEL_CLI) = '';
+            UPDATE CLIENTES SET DIR_CLI = NULL WHERE DIR_CLI IS NOT NULL AND TRIM(DIR_CLI) = '';
+            UPDATE CLIENTES SET COM_CLI = NULL WHERE COM_CLI IS NOT NULL AND TRIM(COM_CLI) = '';
+            UPDATE CLIENTES SET PREF_CLI = NULL WHERE PREF_CLI IS NOT NULL AND TRIM(PREF_CLI) = '';
+            UPDATE CLIENTES SET COR_CLI = NULL WHERE COR_CLI IS NOT NULL AND TRIM(COR_CLI) = '';
+
+            UPDATE PROVEEDORES SET DIR_PROV = NULL WHERE DIR_PROV IS NOT NULL AND TRIM(DIR_PROV) = '';
+            UPDATE PROVEEDORES SET CON_PROV = NULL WHERE CON_PROV IS NOT NULL AND TRIM(CON_PROV) = '';
+            UPDATE PROVEEDORES SET RFC_PROV = NULL WHERE RFC_PROV IS NOT NULL AND TRIM(RFC_PROV) = '';
+            UPDATE PROVEEDORES SET TIP_SUM = NULL WHERE TIP_SUM IS NOT NULL AND TRIM(TIP_SUM) = '';
+            UPDATE PROVEEDORES SET PRO_PROV = NULL WHERE PRO_PROV IS NOT NULL AND TRIM(PRO_PROV) = '';
+
+            UPDATE EMPLEADOS SET DIR_EMP = NULL WHERE DIR_EMP IS NOT NULL AND TRIM(DIR_EMP) = '';
+            UPDATE EMPLEADOS SET PUE_EMP = NULL WHERE PUE_EMP IS NOT NULL AND TRIM(PUE_EMP) = '';
+            UPDATE EMPLEADOS SET HOR_EMP = NULL WHERE HOR_EMP IS NOT NULL AND TRIM(HOR_EMP) = '';
+            UPDATE EMPLEADOS SET CURP_EMP = NULL WHERE CURP_EMP IS NOT NULL AND TRIM(CURP_EMP) = '';
+            UPDATE EMPLEADOS SET TIP_EMP = NULL WHERE TIP_EMP IS NOT NULL AND TRIM(TIP_EMP) = '';
+
+            UPDATE PRODUCTOS SET TIP_PRO = NULL WHERE TIP_PRO IS NOT NULL AND TRIM(TIP_PRO) = '';
+
+            UPDATE PLANTAS SET TAM_PLANT = NULL WHERE TAM_PLANT IS NOT NULL AND TRIM(TAM_PLANT) = '';
+            UPDATE PLANTAS SET TIP_PLANTA = NULL WHERE TIP_PLANTA IS NOT NULL AND TRIM(TIP_PLANTA) = '';
+
+            UPDATE PEDIDOS SET DIR_ENVIO = NULL WHERE DIR_ENVIO IS NOT NULL AND TRIM(DIR_ENVIO) = '';
+
+            UPDATE USUARIOS SET ID_EMP = NULL WHERE ID_EMP IS NOT NULL AND TRIM(ID_EMP) = '';
+        `);
+        console.log('[Limpieza E32] Cadenas vacías o espacios convertidas a NULL en campos opcionales.');
 
         // Registro en log de filas eliminadas por tabla
         console.log(`[Limpieza] Filas eliminadas por tabla: CLIENTES: ${resCli.rowCount || 0}, EMPLEADOS: ${resEmp.rowCount || 0}, PRODUCTOS: ${resPro.rowCount || 0}, PLANTAS: ${resPln.rowCount || 0}, CAT_SERVICIOS: ${resCat.rowCount || 0}`);

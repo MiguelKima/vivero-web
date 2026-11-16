@@ -415,6 +415,15 @@
                     document.getElementById('modalMensaje').style.display = 'flex';
                     return;
                 }
+
+                const prod = listaProductos.find(p => p.ID_PRO === idPro);
+                const stockDisponible = prod && prod.STOCK_PRO !== null && prod.STOCK_PRO !== undefined ? Number(prod.STOCK_PRO) : 0;
+                if (cantNum > stockDisponible) {
+                    document.getElementById('tituloModal').innerText = "Stock Insuficiente";
+                    document.getElementById('textoModal').innerText = `La cantidad solicitada (${cantNum}) excede el stock disponible del producto "${prod?.DESC_PRO || idPro}" (${stockDisponible}).`;
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
             }
 
             // Validación de existencia y cantidad de planta (CU-28 / CU-29 / RN-23 / CU-11 / N1 / E11)
@@ -432,6 +441,16 @@
                 if (cantPlantVal === '' || isNaN(cantPlantNum) || !Number.isInteger(cantPlantNum) || cantPlantNum <= 0) {
                     document.getElementById('tituloModal').innerText = "Validación";
                     document.getElementById('textoModal').innerText = "La cantidad de la planta debe ser un número entero mayor que 0.";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
+
+                const pl = listaPlantas.find(p => p.ID_PLANTA === idPlanta);
+                const stockPlantDisponible = pl && pl.STOCK_PLANT !== null && pl.STOCK_PLANT !== undefined ? Number(pl.STOCK_PLANT) : 0;
+                if (cantPlantNum > stockPlantDisponible) {
+                    const nomPlanta = pl?.NOM_COM || pl?.NOM_CTFO || idPlanta;
+                    document.getElementById('tituloModal').innerText = "Stock Insuficiente";
+                    document.getElementById('textoModal').innerText = `La cantidad solicitada (${cantPlantNum}) excede el stock disponible de la planta "${nomPlanta}" (${stockPlantDisponible}).`;
                     document.getElementById('modalMensaje').style.display = 'flex';
                     return;
                 }

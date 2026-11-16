@@ -393,6 +393,11 @@
                 return;
             }
 
+            if (total > 99999999.99 || saldo > 99999999.99) {
+                mostrarAviso("Validación de Venta", "El monto excede el límite permitido (máximo 99,999,999.99).");
+                return;
+            }
+
             if (id_producto && cant_producto <= 0) {
                 mostrarAviso("Validación de Venta", "La cantidad del producto debe ser un número entero mayor que 0.");
                 return;

@@ -83,9 +83,9 @@
                 </div>
 
                 <div class="form-group">
-                    <label>Empleado Responsable (Opcional):</label>
-                    <select id="id_emp">
-                        <option value="">-- Seleccione un empleado (Opcional) --</option>
+                    <label>Empleado Responsable:</label>
+                    <select id="id_emp" required>
+                        <option value="">-- Seleccione un empleado --</option>
                     </select>
                 </div>
 
@@ -193,6 +193,22 @@
             const trabajo = document.getElementById('trabajo').value.trim();
             const fecha_ejec = document.getElementById('fecha_ejec').value;
             const costoRaw = document.getElementById('costo').value;
+            const id_emp = document.getElementById('id_emp').value;
+
+            if (!id_cli || !id_cli.trim()) {
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "El cliente es obligatorio.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            if (!id_emp || !id_emp.trim()) {
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "El empleado responsable es obligatorio.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
             let costo = 0;
             if (costoRaw !== '' && costoRaw !== null && costoRaw !== undefined) {
                 const parsedCosto = parseFloat(String(costoRaw).replace(/[^0-9.-]/g, ''));
@@ -202,9 +218,14 @@
                     document.getElementById('modalMensaje').style.display = 'flex';
                     return;
                 }
+                if (parsedCosto > 99999999.99) {
+                    document.getElementById('tituloModal').innerText = "Monto Excedido";
+                    document.getElementById('textoModal').innerText = "El costo del servicio excede el límite permitido (máximo 99,999,999.99).";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
                 costo = Math.round((parsedCosto + Number.EPSILON) * 100) / 100;
             }
-            const id_emp = document.getElementById('id_emp').value;
 
             if (!trabajo || !esNombreValido(trabajo)) {
                 document.getElementById('tituloModal').innerText = "Aviso";

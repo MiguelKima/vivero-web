@@ -297,6 +297,15 @@
                 return;
             }
 
+            // El nombre de usuario no puede contener espacios (E27)
+            if (/\s/.test(username)) {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "El nombre de usuario no puede contener espacios (E27).";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
             // Validación de longitud máxima (RN-19: USERNAME VARCHAR(80))
             if (username.length > 80) {
                 esExito = false;
@@ -306,10 +315,10 @@
                 return;
             }
 
-            if (!password) {
+            if (!password || password.trim().length < 4) {
                 esExito = false;
                 document.getElementById('tituloModal').innerText = "Validación";
-                document.getElementById('textoModal').innerText = "La contraseña es obligatoria.";
+                document.getElementById('textoModal').innerText = "La contraseña debe tener una longitud mínima de 4 caracteres (E25).";
                 document.getElementById('modalMensaje').style.display = 'flex';
                 return;
             }
@@ -397,6 +406,12 @@
 
             if (!nuevoUsername || !esNombreValido(nuevoUsername)) {
                 mostrarAviso("Validación", "El nombre de usuario es obligatorio, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).", false);
+                return;
+            }
+
+            // El nombre de usuario no puede contener espacios (E27)
+            if (/\s/.test(nuevoUsername)) {
+                mostrarAviso("Validación", "El nombre de usuario no puede contener espacios (E27).", false);
                 return;
             }
 

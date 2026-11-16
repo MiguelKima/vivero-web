@@ -140,6 +140,9 @@
         function guardarProveedor(event) {
             event.preventDefault();
             const nom_prov = document.getElementById('nom_prov').value.trim();
+            const rfc_prov = document.getElementById('rfc_prov').value.trim();
+            const con_prov = document.getElementById('con_prov').value.trim();
+
             if (!nom_prov || !esNombreValido(nom_prov)) {
                 esExito = false;
                 document.getElementById('tituloModal').innerText = "Validación";
@@ -148,12 +151,36 @@
                 return;
             }
 
+            // Validación de formato de RFC (E22)
+            if (rfc_prov) {
+                const rfcRegex = /^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/i;
+                if (!rfcRegex.test(rfc_prov)) {
+                    esExito = false;
+                    document.getElementById('tituloModal').innerText = "RFC Inválido";
+                    document.getElementById('textoModal').innerText = "El formato del RFC es inválido. Debe contener 12 o 13 caracteres alfanuméricos según el formato oficial del SAT (ejemplo: ABC010101XYZ o ABCD010101XYZ).";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
+            }
+
+            // Validación de formato de contacto como correo electrónico (E23)
+            if (con_prov) {
+                const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+                if (!emailRegex.test(con_prov)) {
+                    esExito = false;
+                    document.getElementById('tituloModal').innerText = "Contacto Inválido";
+                    document.getElementById('textoModal').innerText = "El contacto del proveedor debe ser un correo electrónico válido (ejemplo: contacto@proveedor.com).";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
+            }
+
             const datos = {
                 tip_sum: document.getElementById('tip_sum').value.trim() || null,
                 nom_prov: nom_prov,
-                rfc_prov: document.getElementById('rfc_prov').value.trim() || null,
+                rfc_prov: rfc_prov || null,
                 dir_prov: document.getElementById('dir_prov').value.trim() || null,
-                con_prov: document.getElementById('con_prov').value.trim() || null,
+                con_prov: con_prov || null,
                 pro_prov: document.getElementById('pro_prov').value.trim() || null
             };
 

@@ -211,6 +211,7 @@
             event.preventDefault();
             const nom_cli = document.getElementById('nom_cli').value.trim();
             const cor_cli = document.getElementById('cor_cli').value.trim();
+            const tel_cli = document.getElementById('tel_cli').value.trim();
 
             if (!nom_cli || !esNombreValido(nom_cli)) {
                 esExito = false;
@@ -218,6 +219,18 @@
                 document.getElementById('textoModal').innerText = "El nombre del cliente es obligatorio, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).";
                 document.getElementById('modalMensaje').style.display = 'flex';
                 return;
+            }
+
+            // Validación de formato de teléfono (E21): 10 dígitos numéricos
+            if (tel_cli) {
+                const telLimpio = tel_cli.replace(/[\s-]/g, '');
+                if (!/^\d{10}$/.test(telLimpio)) {
+                    esExito = false;
+                    document.getElementById('tituloModal').innerText = "Teléfono Inválido";
+                    document.getElementById('textoModal').innerText = "El teléfono debe contener exactamente 10 dígitos numéricos (ejemplo: 5512345678).";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
             }
 
             // Validación de formato de correo y dominio después del @ (CU-11 / CU-12 / RN-18 / CU-05 FA-02)
