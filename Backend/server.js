@@ -2319,8 +2319,8 @@ app.put('/api/clientes/:id', async (req, res) => {
         const com_cli_val = com_cli !== undefined ? com_cli : req.body?.COM_CLI;
         const pref_cli_val = pref_cli !== undefined ? pref_cli : req.body?.PREF_CLI;
 
-        if (nom_cli_val !== undefined && (!nom_cli_val || typeof nom_cli_val !== 'string' || !nom_cli_val.trim())) {
-            return res.status(400).json({ exito: false, error: 'El nombre del cliente no puede estar vacío.' });
+        if (nom_cli_val !== undefined && (!nom_cli_val || typeof nom_cli_val !== 'string' || !nom_cli_val.trim() || !esNombreValido(nom_cli_val))) {
+            return res.status(400).json({ exito: false, error: 'El nombre del cliente no puede estar vacío, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' });
         }
 
         if (cor_cli_val !== undefined && cor_cli_val !== null && String(cor_cli_val).trim() !== '') {
@@ -2426,8 +2426,8 @@ app.put('/api/proveedores/:id', async (req, res) => {
         const con_prov_val = con_prov !== undefined ? con_prov : (correo !== undefined ? correo : (req.body?.CON_PROV !== undefined ? req.body?.CON_PROV : req.body?.COR_PROV));
         const pro_prov_val = pro_prov !== undefined ? pro_prov : req.body?.PRO_PROV;
 
-        if (nom_prov_val !== undefined && (!nom_prov_val || typeof nom_prov_val !== 'string' || !nom_prov_val.trim())) {
-            return res.status(400).json({ exito: false, error: 'El nombre del proveedor no puede estar vacío.' });
+        if (nom_prov_val !== undefined && (!nom_prov_val || typeof nom_prov_val !== 'string' || !nom_prov_val.trim() || !esNombreValido(nom_prov_val))) {
+            return res.status(400).json({ exito: false, error: 'El nombre del proveedor no puede estar vacío, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' });
         }
 
         let updates = [];
@@ -2623,8 +2623,8 @@ app.put('/api/productos/:id', async (req, res) => {
         const tip_val = tip_pro !== undefined ? tip_pro : req.body?.TIP_PRO;
         const prov_val = id_prov !== undefined ? id_prov : req.body?.ID_PROV;
 
-        if (desc_val !== undefined && (!desc_val || typeof desc_val !== 'string' || !desc_val.trim())) {
-            return res.status(400).json({ exito: false, error: 'La descripción del producto no puede estar vacía.' });
+        if (desc_val !== undefined && (!desc_val || typeof desc_val !== 'string' || !desc_val.trim() || !esNombreValido(desc_val))) {
+            return res.status(400).json({ exito: false, error: 'La descripción del producto no puede estar vacía, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' });
         }
 
         if (prec_val !== undefined && prec_val !== null && String(prec_val).trim() !== '') {
@@ -2745,8 +2745,12 @@ app.put('/api/plantas/:id', async (req, res) => {
         const tam_val = tam_plant !== undefined ? tam_plant : req.body?.TAM_PLANT;
         const prov_val = prov_plant !== undefined ? prov_plant : req.body?.PROV_PLANT;
 
-        if (ctfo_val !== undefined && (!ctfo_val || typeof ctfo_val !== 'string' || !ctfo_val.trim())) {
-            return res.status(400).json({ exito: false, error: 'El nombre científico de la planta no puede estar vacío.' });
+        if (ctfo_val !== undefined && (!ctfo_val || typeof ctfo_val !== 'string' || !ctfo_val.trim() || !esNombreValido(ctfo_val))) {
+            return res.status(400).json({ exito: false, error: 'El nombre científico de la planta no puede estar vacío, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' });
+        }
+
+        if (com_val !== undefined && (!com_val || typeof com_val !== 'string' || !com_val.trim() || !esNombreValido(com_val))) {
+            return res.status(400).json({ exito: false, error: 'El nombre común de la planta no puede estar vacío, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' });
         }
 
         if (stock_val !== undefined && stock_val !== null && String(stock_val).trim() !== '') {
