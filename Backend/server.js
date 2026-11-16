@@ -277,7 +277,7 @@ app.post('/api/login', async (req, res) => {
         }
         res.json({ exito: true, usuario: { USERNAME: usuario.USERNAME, ROL: usuario.ROL } });
     } catch (err) {
-        console.error('Error en login:', err.message);
+        console.error('Error en login:', err.message, err.detail);
         res.status(500).json({ error: 'Error del servidor: ' + err.message });
     }
 });
@@ -449,8 +449,42 @@ app.get('/api/servicios', async (req, res) => {
     }
 });
 
+// Manejador centralizado de errores de PostgreSQL para endpoints POST (E9)
+function responderErrorPostgres(res, err, idPropuesto, mensajePorDefecto, logPrefix) {
+    if (logPrefix) {
+        console.error(`${logPrefix}:`, err.message, err.detail);
+    } else {
+        console.error('Error en base de datos:', err.message, err.detail);
+    }
+
+    const codigo = err && err.code ? String(err.code) : '';
+
+    if (codigo === '23505') {
+        let idColision = idPropuesto;
+        if (!idColision && err.detail) {
+            const match = String(err.detail).match(/\((?:[^)]+)\)=\(([^)]+)\)/);
+            if (match && match[1]) idColision = match[1].trim();
+        }
+        const errorMsg = idColision 
+            ? `El identificador ${idColision} ya existe en el sistema` 
+            : 'El identificador ya existe en el sistema';
+        return res.status(500).json({ exito: false, error: errorMsg });
+    }
+
+    if (codigo === '23503') {
+        return res.status(500).json({ exito: false, error: 'La referencia no existe' });
+    }
+
+    if (codigo === '23502') {
+        return res.status(500).json({ exito: false, error: 'Falta un campo obligatorio' });
+    }
+
+    return res.status(500).json({ exito: false, error: mensajePorDefecto });
+}
+
 // Proveedores (CU-9 / RN-14: Solo NOM_PROV es obligatorio, RFC único solo si se proporciona)
 app.post('/api/proveedores', async (req, res) => {
+    let id_prov = null;
     try {
         const { tip_sum, nom_prov, rfc_prov, dir_prov, con_prov, pro_prov } = req.body || {};
 
@@ -468,7 +502,7 @@ app.post('/api/proveedores', async (req, res) => {
             }
         }
 
-        const id_prov = await generarSiguienteId('PROVEEDORES', 'ID_PROV', 'PRV');
+        id_prov = await generarSiguienteId('PROVEEDORES', 'ID_PROV', 'PRV');
 
         await pool.query(`
             INSERT INTO PROVEEDORES (ID_PROV, TIP_SUM, NOM_PROV, RFC_PROV, DIR_PROV, CON_PROV, PRO_PROV)
@@ -485,19 +519,13 @@ app.post('/api/proveedores', async (req, res) => {
 
         res.json({ exito: true, mensaje: `Proveedor registrado con éxito (ID: ${id_prov})` });
     } catch (err) {
-        console.error('Error al registrar proveedor:', err.message);
-        if (err.code === '23505') {
-            return res.status(500).json({ 
-                exito: false, 
-                error: 'No se pudo registrar porque el identificador generado ya existe en el sistema. Inténtalo de nuevo.' 
-            });
-        }
-        res.status(500).json({ exito: false, error: 'Error al guardar el proveedor.' });
+        responderErrorPostgres(res, err, id_prov, 'Error al guardar el proveedor.', 'Error al registrar proveedor');
     }
 });
 
 // Clientes (CU-10 / CU-11 / RN-12 / RN-18 / CP-08 / CU-05 FA-02)
 app.post('/api/clientes', async (req, res) => {
+    let id_cli = null;
     try {
         const { nom_cli, dir_cli, tel_cli, cor_cli, com_cli, pref_cli } = req.body || {};
 
@@ -540,7 +568,7 @@ app.post('/api/clientes', async (req, res) => {
             return res.status(400).json({ exito: false, error: `El cliente "${nombreLimpio}" ya se encuentra registrado.` });
         }
 
-        const id_cli = await generarSiguienteId('CLIENTES', 'ID_CLI', 'CLI');
+        id_cli = await generarSiguienteId('CLIENTES', 'ID_CLI', 'CLI');
 
         const comLimpio = com_cli && com_cli.trim() ? sanitizarSqlYHtml(com_cli) : null;
         const prefLimpio = pref_cli && pref_cli.trim() ? sanitizarSqlYHtml(pref_cli) : null;
@@ -561,14 +589,7 @@ app.post('/api/clientes', async (req, res) => {
 
         res.json({ exito: true, mensaje: `Cliente registrado con éxito (ID: ${id_cli})` });
     } catch (err) {
-        console.error('Error al registrar cliente:', err.message);
-        if (err.code === '23505') {
-            return res.status(500).json({ 
-                exito: false, 
-                error: 'No se pudo registrar porque el identificador generado ya existe en el sistema. Inténtalo de nuevo.' 
-            });
-        }
-        res.status(500).json({ exito: false, error: 'Error al guardar el cliente.' });
+        responderErrorPostgres(res, err, id_cli, 'Error al guardar el cliente.', 'Error al registrar cliente');
     }
 });
 
@@ -682,6 +703,7 @@ async function registrarAuditoria(req, accion, idUsuarioAfectado, datosAnteriore
 // Empleados (CU-13 / CU-14 / CU-15 / CU-16 / CU-17 / CU-18 / RN-12 / RN-15 / RN-16 / RN-19 / RN-34 / RN-35)
 app.post('/api/empleados', async (req, res) => {
     let curpLimpio = null;
+    let id_emp = null;
 
     try {
         const tienePermiso = await verificarAccesoAdmin(req, res);
@@ -741,7 +763,7 @@ app.post('/api/empleados', async (req, res) => {
             }
         }
 
-        const id_emp = await generarSiguienteId('EMPLEADOS', 'ID_EMP', 'EMP');
+        id_emp = await generarSiguienteId('EMPLEADOS', 'ID_EMP', 'EMP');
 
         await pool.query(`
             INSERT INTO EMPLEADOS (ID_EMP, TIP_EMP, CURP_EMP, NOM_EMP, DIR_EMP, PUE_EMP, HOR_EMP, SUE_EMP, INI_ALTA, FIN_ALTA)
@@ -759,14 +781,7 @@ app.post('/api/empleados', async (req, res) => {
 
         res.json({ exito: true, mensaje: `Empleado registrado con éxito (ID: ${id_emp})` });
     } catch (err) {
-        console.error('Error al registrar empleado:', err.message);
-        if (err.code === '23505') {
-            return res.status(500).json({ 
-                exito: false, 
-                error: 'No se pudo registrar porque el identificador generado ya existe en el sistema. Inténtalo de nuevo.' 
-            });
-        }
-        res.status(500).json({ exito: false, error: 'Error al guardar el empleado.' });
+        responderErrorPostgres(res, err, id_emp, 'Error al guardar el empleado.', 'Error al registrar empleado');
     }
 });
 
@@ -806,6 +821,7 @@ const validacionesCatalogoServicio = [
 
 // Catálogo de Servicios (CU-14 / CU-40 / CU-41 / RN-12 / RN-16 / RN-33 / RN-34 / RN-35 / V-01 / V-07)
 app.post('/api/catalogo-servicios', validacionesCatalogoServicio, async (req, res) => {
+    let id_cat = null;
     try {
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
@@ -868,7 +884,7 @@ app.post('/api/catalogo-servicios', validacionesCatalogoServicio, async (req, re
             return res.status(400).json({ exito: false, error: `El servicio "${nombreLimpio}" ya existe en el catálogo.` });
         }
 
-        const id_cat = await generarSiguienteId('CAT_SERVICIOS', 'ID_CAT_SERV', 'CSV');
+        id_cat = await generarSiguienteId('CAT_SERVICIOS', 'ID_CAT_SERV', 'CSV');
 
         await pool.query(`
             INSERT INTO CAT_SERVICIOS (ID_CAT_SERV, NOM_SERV, DESC_SERV, COSTO_EST)
@@ -877,19 +893,13 @@ app.post('/api/catalogo-servicios', validacionesCatalogoServicio, async (req, re
 
         res.json({ exito: true, mensaje: `Servicio agregado al catálogo con éxito (ID: ${id_cat})` });
     } catch (err) {
-        console.error('Error al guardar en catálogo:', err.message);
-        if (err.code === '23505') {
-            return res.status(500).json({ 
-                exito: false, 
-                error: 'No se pudo registrar porque el identificador generado ya existe en el sistema. Inténtalo de nuevo.' 
-            });
-        }
-        res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar registrar el servicio en el catálogo.' });
+        responderErrorPostgres(res, err, id_cat, 'Ocurrió un error en el servidor al intentar registrar el servicio en el catálogo.', 'Error al guardar en catálogo');
     }
 });
 
 // Productos (CU-19 / CU-20 / CU-21 / CU-22 / RN-16 / RN-17 / RN-31 / CU-08 FA-02 / CU-08 FA-03)
 app.post('/api/productos', async (req, res) => {
+    let id_pro = null;
     try {
         const { tip_pro, desc_pro, stock_pro, prec_pro, id_prov } = req.body || {};
 
@@ -952,7 +962,7 @@ app.post('/api/productos', async (req, res) => {
             return res.status(400).json({ exito: false, error: `El producto "${descripcionLimpia}" ya existe en el inventario.` });
         }
 
-        const id_pro = await generarSiguienteId('PRODUCTOS', 'ID_PRO', 'PRO');
+        id_pro = await generarSiguienteId('PRODUCTOS', 'ID_PRO', 'PRO');
 
         await pool.query(`
             INSERT INTO PRODUCTOS (ID_PRO, TIP_PRO, DESC_PRO, STOCK_PRO, PREC_PRO, ID_PROV)
@@ -961,14 +971,7 @@ app.post('/api/productos', async (req, res) => {
 
         res.json({ exito: true, mensaje: `Producto registrado con éxito (ID: ${id_pro})` });
     } catch (err) {
-        console.error('Error al registrar producto:', err.message);
-        if (err.code === '23505') {
-            return res.status(500).json({ 
-                exito: false, 
-                error: 'No se pudo registrar porque el identificador generado ya existe en el sistema. Inténtalo de nuevo.' 
-            });
-        }
-        res.status(500).json({ exito: false, error: 'Error al guardar el producto.' });
+        responderErrorPostgres(res, err, id_pro, 'Error al guardar el producto.', 'Error al registrar producto');
     }
 });
 
@@ -1046,6 +1049,7 @@ const validacionesPlanta = [
 
 // Plantas (CU-23 / CU-24 / CU-25 / RN-12 / RN-16 / RN-17 / RN-31 / CP-12 / V-01 / V-07)
 app.post('/api/plantas', validacionesPlanta, async (req, res) => {
+    let id_planta = null;
     try {
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
@@ -1119,7 +1123,7 @@ app.post('/api/plantas', validacionesPlanta, async (req, res) => {
             return res.status(400).json({ exito: false, error: `La planta "${cientificoLimpio}" ya se encuentra registrada.` });
         }
 
-        const id_planta = await generarSiguienteId('PLANTAS', 'ID_PLANTA', 'PLN');
+        id_planta = await generarSiguienteId('PLANTAS', 'ID_PLANTA', 'PLN');
 
         await pool.query(`
             INSERT INTO PLANTAS (ID_PLANTA, TIP_PLANTA, NOM_CTFO, NOM_COM, TAM_PLANT, STOCK_PLANT, PROV_PLANT, PREC_PLANTA)
@@ -1137,14 +1141,7 @@ app.post('/api/plantas', validacionesPlanta, async (req, res) => {
 
         res.json({ exito: true, mensaje: `Planta registrada con éxito (ID: ${id_planta})` });
     } catch (err) {
-        console.error('Error al registrar planta:', err.message);
-        if (err.code === '23505') {
-            return res.status(500).json({ 
-                exito: false, 
-                error: 'No se pudo registrar porque el identificador generado ya existe en el sistema. Inténtalo de nuevo.' 
-            });
-        }
-        res.status(500).json({ exito: false, error: 'Error al guardar la planta.' });
+        responderErrorPostgres(res, err, id_planta, 'Error al guardar la planta.', 'Error al registrar planta');
     }
 });
 
@@ -1243,6 +1240,7 @@ const validacionesServicio = [
 
 // Servicios (CU-13 / CU-32 / CU-33 / CU-35 / CU-36 / CP-19 / V-01 / V-07 / RN-16 / RN-19 / RN-33)
 app.post('/api/servicios', validacionesServicio, async (req, res) => {
+    let id_servicio = null;
     try {
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
@@ -1363,7 +1361,7 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
             }
         }
 
-        let id_servicio = id_serv && typeof id_serv === 'string' && id_serv.trim() ? id_serv.trim() : null;
+        id_servicio = id_serv && typeof id_serv === 'string' && id_serv.trim() ? id_serv.trim() : null;
         if (!id_servicio) {
             const lastServ = await pool.query('SELECT ID_SERV AS "ID_SERV" FROM SERVICIOS ORDER BY LENGTH(ID_SERV) DESC, ID_SERV DESC LIMIT 1');
             let nextId = 1;
@@ -1396,13 +1394,13 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
             }
         });
     } catch (err) {
-        console.error('--- ERROR AL REGISTRAR SERVICIO ---', err.message);
-        res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar registrar el servicio.' });
+        responderErrorPostgres(res, err, id_servicio, 'Ocurrió un error en el servidor al intentar registrar el servicio.', '--- ERROR AL REGISTRAR SERVICIO ---');
     }
 });
 
 // Pedidos (Registrar) (CU-28 / CU-29 / RN-23 / CU-11)
 app.post('/api/pedidos', async (req, res) => {
+    let id_ped = null;
     try {
         const { tip_ped, tip_env, dir_envio, id_cli, id_pro, num_can, id_planta, num_can_plant, id_rep, tiem_entrega, tot_pedido } = req.body || {};
 
@@ -1494,7 +1492,7 @@ app.post('/api/pedidos', async (req, res) => {
             console.error('Error calculando ID_PED:', e.message);
         }
 
-        let id_ped = 'PED-' + String(nextPedNum).padStart(3, '0');
+        id_ped = 'PED-' + String(nextPedNum).padStart(3, '0');
         let idPedExiste = true;
         while (idPedExiste) {
             const checkPedId = await pool.query('SELECT COUNT(*) AS "total" FROM PEDIDOS WHERE ID_PED = $1', [id_ped]);
@@ -1547,8 +1545,7 @@ app.post('/api/pedidos', async (req, res) => {
         
         res.json({ exito: true, mensaje: 'Pedido registrado con éxito', ticket: { id_ped } });
     } catch (err) {
-        console.error('Error al registrar pedido:', err.message);
-        res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar registrar el pedido.' });
+        responderErrorPostgres(res, err, id_ped, 'Ocurrió un error en el servidor al intentar registrar el pedido.', 'Error al registrar pedido');
     }
 });
 
@@ -1597,6 +1594,7 @@ function limpiarVentasRecientes() {
 // Ventas (Registrar) (CU-30 / CU-31 / RN-16 / RN-29 / CU-12)
 app.post('/api/ventas', async (req, res) => {
     let claveVenta;
+    let id_venta = null;
     try {
         limpiarVentasRecientes();
 
@@ -1699,7 +1697,7 @@ app.post('/api/ventas', async (req, res) => {
                 console.error('Error calculando ID_VEN:', e.message);
             }
 
-            let id_venta = 'VEN-' + String(nextId).padStart(3, '0');
+            id_venta = 'VEN-' + String(nextId).padStart(3, '0');
             let idVenExiste = true;
             while (idVenExiste) {
                 const checkVenId = await pool.query('SELECT COUNT(*) AS "total" FROM VENTAS WHERE ID_VEN = $1', [id_venta]);
@@ -1750,8 +1748,7 @@ app.post('/api/ventas', async (req, res) => {
         if (claveVenta) {
             ventasRecientes.delete(claveVenta);
         }
-        console.error('--- ERROR AL REGISTRAR VENTA ---', err);
-        res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar registrar la venta.' });
+        responderErrorPostgres(res, err, id_venta, 'Ocurrió un error en el servidor al intentar registrar la venta.', '--- ERROR AL REGISTRAR VENTA ---');
     }
 });
 
@@ -1957,6 +1954,7 @@ app.get('/api/usuarios', async (req, res) => {
 // Registrar Usuario del Sistema (CU-18 / CU-26 / CU-27 / RN-19 / RN-22 / RN-34 / RN-35)
 app.post('/api/usuarios', async (req, res) => {
     let usernameLimpio = '';
+    let id_usuario = null;
     try {
         const tienePermiso = await verificarAccesoAdmin(req, res);
         if (!tienePermiso) return;
@@ -2035,7 +2033,7 @@ app.post('/api/usuarios', async (req, res) => {
             console.error('Error calculando ID_USUARIO:', e.message);
         }
 
-        let id_usuario = 'USR-' + String(nextNum).padStart(3, '0');
+        id_usuario = 'USR-' + String(nextNum).padStart(3, '0');
         let idExiste = true;
         while (idExiste) {
             const checkId = await pool.query('SELECT COUNT(*) AS "total" FROM USUARIOS WHERE TRIM(ID_USUARIO) = TRIM($1)', [id_usuario]);
@@ -2080,40 +2078,25 @@ app.post('/api/usuarios', async (req, res) => {
     } catch (err) {
         console.error('--- ERROR SQL EN USUARIOS:', err.message, err.detail, err.code);
         const nombreDisplay = usernameLimpio || req.body?.username || '';
-        if (err.code === '23505') {
-            if (err.constraint && err.constraint.toLowerCase().includes('pkey')) {
-                return res.status(500).json({
-                    exito: false,
-                    error: `No se pudo registrar el usuario porque ya existe un registro con el mismo identificador en el sistema.`
-                });
-            }
+        if (err.code === '23505' && ((err.constraint && err.constraint.toLowerCase().includes('username')) || (err.detail && err.detail.toLowerCase().includes('username')))) {
             return res.status(400).json({
                 exito: false,
                 error: `El nombre de usuario "${nombreDisplay}" ya está registrado en el sistema. Debe elegir un nombre de usuario diferente conforme a la regla RN-13.`
             });
         }
-        if (err.code === '23503') {
-            return res.status(400).json({
-                exito: false,
-                error: `El empleado seleccionado no existe o no es válido.`
-            });
-        }
-        if (err.code === '23502') {
-            return res.status(400).json({
-                exito: false,
-                error: `Faltan campos obligatorios para registrar el usuario en el sistema.`
-            });
-        }
-        if (err.message && err.message.toUpperCase().includes('UNIQUE')) {
+        if (err.message && err.message.toUpperCase().includes('UNIQUE') && err.message.toUpperCase().includes('USERNAME')) {
             return res.status(400).json({
                 exito: false,
                 error: `El nombre de usuario "${nombreDisplay}" ya está registrado en el sistema. Debe elegir un nombre de usuario diferente conforme a la regla RN-13.`
             });
         }
-        res.status(500).json({ 
-            exito: false, 
-            error: 'Ocurrió un error en el servidor al intentar registrar el usuario. Por favor verifique los datos ingresados.' 
-        });
+        return responderErrorPostgres(
+            res,
+            err,
+            id_usuario,
+            'Ocurrió un error en el servidor al intentar registrar el usuario. Por favor verifique los datos ingresados.',
+            '--- ERROR SQL EN USUARIOS'
+        );
     }
 });
 

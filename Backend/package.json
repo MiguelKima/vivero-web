@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "node test-cu14.js",
-    "test:cu14": "node test-cu14.js"
+    "test:cu14": "node test-cu14.js",
+    "test:e9": "node test-e9.js"
   },
   "keywords": [],
   "author": "",
