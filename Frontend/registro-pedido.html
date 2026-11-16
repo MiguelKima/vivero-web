@@ -72,7 +72,7 @@
         <!-- Formulario de Pedidos -->
         <div class="card" style="max-width: 600px; margin: auto; margin-bottom: 30px;">
             <h2>Alta de Nuevo Pedido</h2>
-            <form id="formPedido" onsubmit="guardarPedido(event)">
+            <form id="formPedido" novalidate onsubmit="guardarPedido(event)">
                 
                 <div class="form-group">
                     <label>Tipo de Pedido:</label>
@@ -113,7 +113,7 @@
 
                 <div class="form-group">
                     <label>Cantidad de Producto:</label>
-                    <input type="number" id="num_can" min="1" step="1" value="1" oninput="calcularTotalPedido()">
+                    <input type="number" id="num_can" min="0" step="1" value="1" oninput="calcularTotalPedido()">
                 </div>
 
                 <div class="form-group">
@@ -125,7 +125,7 @@
 
                 <div class="form-group">
                     <label>Cantidad de Plantas:</label>
-                    <input type="number" id="num_can_plant" min="1" step="1" value="1" oninput="calcularTotalPedido()">
+                    <input type="number" id="num_can_plant" min="0" step="1" value="1" oninput="calcularTotalPedido()">
                 </div>
 
                 <div class="form-group">
@@ -354,6 +354,38 @@
         function guardarPedido(event) {
             event.preventDefault();
 
+            const tipPed = document.getElementById('tip_ped').value;
+            if (!tipPed) {
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "El tipo de pedido es obligatorio.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            const tipEnv = document.getElementById('tip_env').value;
+            if (!tipEnv) {
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "El tipo de envío es obligatorio.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            const dirEnvio = document.getElementById('dir_envio').value;
+            if (tipEnv === 'A domicilio' && (!dirEnvio || !dirEnvio.trim())) {
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "La dirección de envío es obligatoria para envíos a domicilio.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            const idCli = document.getElementById('id_cli').value;
+            if (!idCli) {
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "Debe seleccionar un cliente.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
             const idPro = document.getElementById('id_pro').value;
             const idPlanta = document.getElementById('id_planta').value;
             const totalPedido = parseFloat(document.getElementById('tot_pedido').value) || 0;
@@ -365,7 +397,7 @@
                 return;
             }
 
-            // Validación de existencia y cantidad de producto (CU-28 / RN-23 / CU-11 / N1)
+            // Validación de existencia y cantidad de producto (CU-28 / RN-23 / CU-11 / N1 / E11)
             if (idPro) {
                 const existeProducto = listaProductos.some(p => p.ID_PRO === idPro);
                 if (!existeProducto) {
@@ -385,7 +417,7 @@
                 }
             }
 
-            // Validación de existencia y cantidad de planta (CU-28 / CU-29 / RN-23 / CU-11 / N1)
+            // Validación de existencia y cantidad de planta (CU-28 / CU-29 / RN-23 / CU-11 / N1 / E11)
             if (idPlanta) {
                 const existePlanta = listaPlantas.some(pl => pl.ID_PLANTA === idPlanta);
                 if (!existePlanta) {
@@ -403,6 +435,22 @@
                     document.getElementById('modalMensaje').style.display = 'flex';
                     return;
                 }
+            }
+
+            const idRep = document.getElementById('id_rep').value;
+            if (!idRep) {
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "Debe seleccionar un repartidor.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
+
+            const tiemEntrega = document.getElementById('tiem_entrega').value;
+            if (!tiemEntrega || !tiemEntrega.trim()) {
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "El tiempo estimado de entrega es obligatorio.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
             }
 
             const cantProFinal = idPro ? parseInt(document.getElementById('num_can').value, 10) : null;

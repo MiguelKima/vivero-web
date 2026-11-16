@@ -82,7 +82,7 @@
         <!-- Formulario de Venta -->
         <div class="card" style="max-width: 600px; margin: auto; margin-bottom: 30px;">
             <h2>Punto de Venta / Caja</h2>
-            <form id="formVenta" onsubmit="realizarVenta(event)">
+            <form id="formVenta" novalidate onsubmit="realizarVenta(event)">
                 <div class="form-group">
                     <label>Cliente:</label>
                     <select id="id_cliente" required>
@@ -387,6 +387,12 @@
                 return;
             }
 
+            // Si el total es $0 con artículo seleccionado, muestra el modal (E11)
+            if (total <= 0) {
+                mostrarAviso("Validación de Venta", "El total de la venta debe ser mayor a 0");
+                return;
+            }
+
             if (id_producto && cant_producto <= 0) {
                 mostrarAviso("Validación de Venta", "La cantidad del producto debe ser un número entero mayor que 0.");
                 return;
@@ -394,12 +400,6 @@
 
             if (id_planta && cant_planta <= 0) {
                 mostrarAviso("Validación de Venta", "La cantidad de la planta debe ser un número entero mayor que 0.");
-                return;
-            }
-
-            // Validación N2: El total de la venta debe ser mayor a 0 (no se permiten ventas con total $0.00)
-            if (total <= 0) {
-                mostrarAviso("Validación de Venta", "El total de la venta debe ser mayor a 0 (no se permiten ventas con total $0.00).");
                 return;
             }
 
