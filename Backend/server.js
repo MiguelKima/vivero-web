@@ -14,49 +14,6 @@ try {
     const crearCadenaValidacion = (campo) => {
         const validadores = [];
         const sanitizadores = [];
-        const chain = {
-            trim: () => {
-                sanitizadores.push((req) => {
-                    if (req.body && typeof req.body[campo] === 'string') {
-                        req.body[campo] = req.body[campo].trim();
-                    }
-                });
-                return chain;
-            },
-            escape: () => {
-                sanitizadores.push((req) => {
-                    if (req.body && typeof req.body[campo] === 'string') {
-                        req.body[campo] = req.body[campo]
-                            .replace(/&/g, '&amp;')
-                            .replace(/</g, '&lt;')
-                            .replace(/>/g, '&gt;')
-                            .replace(/"/g, '&quot;')
-                            .replace(/'/g, '&#x27;');
-                    }
-                });
-                return chain;
-            },
-            notEmpty: () => {
-                const valFn = (req) => {
-                    const val = req.body ? req.body[campo] : undefined;
-                    return val !== undefined && val !== null && String(val).trim().length > 0;
-                };
-                validadores.push(valFn);
-                return chain;
-            },
-            withMessage: (msg) => {
-                if (validadores.length > 0) {
-                    validadores[validadores.length - 1].msg = msg;
-                }
-                return chain;
-            },
-            optional: () => chain,
-            custom: (fn) => {
-                const valFn = (req) => fn(req.body ? req.body[campo] : undefined, { req });
-                validadores.push(valFn);
-                return chain;
-            }
-        };
 
         const middleware = (req, res, next) => {
             req._validationErrors = req._validationErrors || [];
@@ -75,11 +32,64 @@ try {
             for (const s of sanitizadores) {
                 s(req);
             }
-            next();
+            if (typeof next === 'function') next();
         };
 
-        Object.assign(middleware, chain);
-        return middleware;
+        middleware.trim = () => {
+            sanitizadores.push((req) => {
+                if (req.body && typeof req.body[campo] === 'string') {
+                    req.body[campo] = req.body[campo].trim();
+                }
+            });
+            return middleware;
+        };
+
+        middleware.escape = () => {
+            sanitizadores.push((req) => {
+                if (req.body && typeof req.body[campo] === 'string') {
+                    req.body[campo] = req.body[campo]
+                        .replace(/&/g, '&amp;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;')
+                        .replace(/"/g, '&quot;')
+                        .replace(/'/g, '&#x27;');
+                }
+            });
+            return middleware;
+        };
+
+        middleware.notEmpty = () => {
+            const valFn = (req) => {
+                const val = req.body ? req.body[campo] : undefined;
+                return val !== undefined && val !== null && String(val).trim().length > 0;
+            };
+            validadores.push(valFn);
+            return middleware;
+        };
+
+        middleware.withMessage = (msg) => {
+            if (validadores.length > 0) {
+                validadores[validadores.length - 1].msg = msg;
+            }
+            return middleware;
+        };
+
+        middleware.optional = () => middleware;
+
+        middleware.custom = (fn) => {
+            const valFn = (req) => fn(req.body ? req.body[campo] : undefined, { req });
+            validadores.push(valFn);
+            return middleware;
+        };
+
+        return new Proxy(middleware, {
+            get(target, prop) {
+                if (prop in target) {
+                    return target[prop];
+                }
+                return () => middleware;
+            }
+        });
     };
 
     body = (campo) => crearCadenaValidacion(campo);
