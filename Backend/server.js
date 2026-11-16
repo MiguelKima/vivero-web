@@ -3770,10 +3770,10 @@ async function asegurarLongitudesDiccionarioDatos() {
     }
 }
 
-// Migración automática de contraseñas legadas en texto plano a hashes seguros (RN-41 / N10)
+// Migración automática de contraseñas legadas en texto plano a hashes seguros (RN-41 / N10 / E8)
 async function migrarContrasenasTextoPlano() {
     try {
-        console.log('Iniciando verificación y migración de contraseñas a hashes seguros (RN-41 / N10)...');
+        console.log('Iniciando verificación y migración de contraseñas a hashes seguros (RN-41 / N10 / E8)...');
         await pool.query(`
             DO $$
             BEGIN
@@ -3786,32 +3786,46 @@ async function migrarContrasenasTextoPlano() {
             END $$;
         `);
 
-        const res = await pool.query('SELECT ID_USUARIO, USERNAME, PASSWORD FROM USUARIOS');
+        const res = await pool.query(`
+            SELECT 
+                TRIM(ID_USUARIO) AS "ID_USUARIO", 
+                TRIM(USERNAME) AS "USERNAME", 
+                PASSWORD AS "PASSWORD" 
+            FROM USUARIOS
+        `);
         let migradas = 0;
         for (const u of res.rows) {
-            const rawPass = u.PASSWORD ? String(u.PASSWORD).trim() : '';
+            const rawPass = (u.PASSWORD !== undefined && u.PASSWORD !== null)
+                ? String(u.PASSWORD).trim()
+                : ((u.password !== undefined && u.password !== null) ? String(u.password).trim() : '');
+            const idUsuario = u.ID_USUARIO || u.id_usuario;
+            const username = u.USERNAME || u.username;
+
             if (rawPass && !esPasswordHasheada(rawPass)) {
                 const passHash = hashearPassword(rawPass);
-                await pool.query('UPDATE USUARIOS SET PASSWORD = $1 WHERE ID_USUARIO = $2 OR USERNAME = $3', [passHash, u.ID_USUARIO, u.USERNAME]);
+                await pool.query(
+                    'UPDATE USUARIOS SET PASSWORD = $1 WHERE TRIM(ID_USUARIO) = TRIM($2) OR TRIM(USERNAME) = TRIM($3)',
+                    [passHash, idUsuario, username]
+                );
                 migradas++;
             }
         }
         if (migradas > 0) {
-            console.log(`Se migraron exitosamente ${migradas} contraseñas de texto plano a hashes seguros PBKDF2 (RN-41 / N10).`);
+            console.log(`[Seguridad RN-41 / E8] Se migraron exitosamente ${migradas} contraseñas de texto plano a hashes seguros PBKDF2.`);
         } else {
-            console.log('Todas las contraseñas en USUARIOS ya se encuentran protegidas con hash criptográfico (RN-41 / N10).');
+            console.log('[Seguridad RN-41 / E8] Todas las contraseñas en USUARIOS ya se encuentran protegidas con hash criptográfico.');
         }
-        return true;
+        return { exito: true, migradas };
     } catch (err) {
-        console.error('Aviso durante la migración de contraseñas (RN-41 / N10):', err.message);
-        return false;
+        console.error('Aviso durante la migración de contraseñas (RN-41 / N10 / E8):', err.message);
+        return { exito: false, error: err.message };
     }
 }
 
 app.get('/api/mantenimiento/migrar-contrasenas', async (req, res) => {
     try {
         const resultado = await migrarContrasenasTextoPlano();
-        res.json({ exito: true, mensaje: 'Migración de contraseñas a hashes ejecutada.', completado: resultado });
+        res.json({ exito: true, mensaje: 'Migración de contraseñas a hashes ejecutada.', detalle: resultado });
     } catch (e) {
         res.status(500).json({ exito: false, error: e.message });
     }
