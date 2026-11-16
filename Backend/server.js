@@ -11,7 +11,6 @@ try {
     body = ev.body;
     validationResult = ev.validationResult;
 } catch (e) {
-    // Compatibilidad en caso de que express-validator aún no esté en el entorno
     const crearCadenaValidacion = (campo) => {
         const validadores = [];
         const sanitizadores = [];
@@ -158,18 +157,15 @@ app.post('/api/login', async (req, res) => {
             return res.json({ exito: false, error: 'Usuario o contraseña incorrectos.' });
         }
 
-        const request = new sql.Request();
-        request.input('username', sql.NVarChar, username);
-        request.input('password', sql.NVarChar, password);
+        const result = await pool.query(`
+            SELECT TRIM(USERNAME) AS "USERNAME", TRIM(ROL) AS "ROL", 
+                   COALESCE(ESTADO, 'Activo') AS "ESTADO" 
+            FROM USUARIOS 
+            WHERE TRIM(USERNAME) = $1 AND TRIM(PASSWORD) = $2
+        `, [String(username).trim(), String(password).trim()]);
 
-        const result = await request.query(`
-            SELECT USERNAME, ROL, ISNULL(ESTADO, 'Activo') AS ESTADO 
-            FROM dbo.USUARIOS 
-            WHERE USERNAME = @username AND PASSWORD = @password
-        `);
-        
-        if (result.recordset.length > 0) {
-            const usuario = result.recordset[0];
+        if (result.rows.length > 0) {
+            const usuario = result.rows[0];
             if (usuario.ESTADO && usuario.ESTADO.toLowerCase() === 'inactivo') {
                 return res.json({ 
                     exito: false, 
@@ -182,29 +178,46 @@ app.post('/api/login', async (req, res) => {
         }
     } catch (err) {
         console.error('Error en login:', err.message);
-        // No se devuelven detalles del error técnico al cliente para evitar fuga de información
-        res.status(500).json({ exito: false, error: 'Error del servidor. Por favor intente más tarde.' });
+        res.status(500).json({ error: 'Error del servidor: ' + err.message });
     }
 });
 
 // Obtener Plantas
 app.get('/api/plantas', async (req, res) => {
     try {
-        const result = await (new sql.Request()).query(`
-            SELECT ID_PLANTA, TIP_PLANTA, NOM_CTFO, NOM_COM, STOCK_PLANT, 
-            CAST(ISNULL(PREC_PLANTA, 0) AS FLOAT) AS PREC_PLANTA 
-            FROM dbo.PLANTAS
+        const result = await pool.query(`
+            SELECT 
+                ID_PLANTA AS "ID_PLANTA", 
+                COALESCE(TIP_PLANTA, '') AS "TIP_PLANTA", 
+                NOM_CTFO AS "NOM_CTFO", 
+                NOM_COM AS "NOM_COM", 
+                COALESCE(TAM_PLANT, '') AS "TAM_PLANT", 
+                STOCK_PLANT AS "STOCK_PLANT", 
+                COALESCE(PROV_PLANT, '') AS "PROV_PLANT", 
+                CAST(COALESCE(PREC_PLANTA, 0) AS FLOAT) AS "PREC_PLANTA" 
+            FROM PLANTAS
         `);
-        res.json(result.recordset);
+        res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: 'Error al obtener plantas' });
     }
 });
 
+// Obtener Proveedores
 app.get('/api/proveedores', async (req, res) => {
     try {
-        const result = await (new sql.Request()).query('SELECT ID_PROV, NOM_PROV FROM dbo.PROVEEDORES');
-        res.json(result.recordset);
+        const result = await pool.query(`
+            SELECT 
+                ID_PROV AS "ID_PROV", 
+                NOM_PROV AS "NOM_PROV",
+                COALESCE(TIP_SUM, '') AS "TIP_SUM",
+                COALESCE(RFC_PROV, '') AS "RFC_PROV",
+                COALESCE(DIR_PROV, '') AS "DIR_PROV",
+                COALESCE(CON_PROV, '') AS "CON_PROV",
+                COALESCE(PRO_PROV, '') AS "PRO_PROV"
+            FROM PROVEEDORES
+        `);
+        res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: 'Error al obtener proveedores' });
     }
@@ -213,18 +226,18 @@ app.get('/api/proveedores', async (req, res) => {
 // Obtener Clientes (CU-16 / CU-42 / CU-43 / CU-47)
 app.get('/api/clientes', async (req, res) => {
     try {
-        const result = await (new sql.Request()).query(`
+        const result = await pool.query(`
             SELECT 
-                ID_CLI, 
-                NOM_CLI, 
-                ISNULL(DIR_CLI, '') AS DIR_CLI, 
-                ISNULL(TEL_CLI, '') AS TEL_CLI, 
-                ISNULL(COR_CLI, '') AS COR_CLI, 
-                ISNULL(COM_CLI, '') AS COM_CLI, 
-                ISNULL(PREF_CLI, '') AS PREF_CLI 
-            FROM dbo.CLIENTES
+                ID_CLI AS "ID_CLI", 
+                NOM_CLI AS "NOM_CLI", 
+                COALESCE(DIR_CLI, '') AS "DIR_CLI", 
+                COALESCE(TEL_CLI, '') AS "TEL_CLI", 
+                COALESCE(COR_CLI, '') AS "COR_CLI", 
+                COALESCE(COM_CLI, '') AS "COM_CLI", 
+                COALESCE(PREF_CLI, '') AS "PREF_CLI" 
+            FROM CLIENTES
         `);
-        res.json(result.recordset);
+        res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: 'Error al obtener clientes' });
     }
@@ -233,8 +246,19 @@ app.get('/api/clientes', async (req, res) => {
 // Obtener Empleados
 app.get('/api/empleados', async (req, res) => {
     try {
-        const result = await (new sql.Request()).query('SELECT ID_EMP, NOM_EMP, PUE_EMP FROM dbo.EMPLEADOS');
-        res.json(result.recordset);
+        const result = await pool.query(`
+            SELECT 
+                ID_EMP AS "ID_EMP", 
+                NOM_EMP AS "NOM_EMP", 
+                COALESCE(PUE_EMP, '') AS "PUE_EMP",
+                COALESCE(TIP_EMP, '') AS "TIP_EMP",
+                COALESCE(CURP_EMP, '') AS "CURP_EMP",
+                COALESCE(DIR_EMP, '') AS "DIR_EMP",
+                COALESCE(HOR_EMP, '') AS "HOR_EMP",
+                CAST(COALESCE(SUE_EMP, 0) AS FLOAT) AS "SUE_EMP"
+            FROM EMPLEADOS
+        `);
+        res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: 'Error al obtener empleados' });
     }
@@ -243,8 +267,15 @@ app.get('/api/empleados', async (req, res) => {
 // Obtener Catálogo de Servicios
 app.get('/api/catalogo-servicios', async (req, res) => {
     try {
-        const result = await (new sql.Request()).query('SELECT ID_CAT_SERV, NOM_SERV, DESC_SERV, CAST(COSTO_EST AS FLOAT) AS COSTO_EST FROM dbo.CAT_SERVICIOS');
-        res.json(result.recordset);
+        const result = await pool.query(`
+            SELECT 
+                ID_CAT_SERV AS "ID_CAT_SERV", 
+                NOM_SERV AS "NOM_SERV", 
+                COALESCE(DESC_SERV, '') AS "DESC_SERV", 
+                CAST(COALESCE(COSTO_EST, 0) AS FLOAT) AS "COSTO_EST" 
+            FROM CAT_SERVICIOS
+        `);
+        res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: 'Error al obtener catálogo de servicios' });
     }
@@ -253,13 +284,17 @@ app.get('/api/catalogo-servicios', async (req, res) => {
 // Obtener Productos
 app.get('/api/productos', async (req, res) => {
     try {
-        const result = await (new sql.Request()).query(`
-            SELECT ID_PRO, TIP_PRO, DESC_PRO, STOCK_PRO, 
-            CAST(ISNULL(PREC_PRO, 0) AS FLOAT) AS PREC_PRO, 
-            ID_PROV 
-            FROM dbo.PRODUCTOS
+        const result = await pool.query(`
+            SELECT 
+                ID_PRO AS "ID_PRO", 
+                COALESCE(TIP_PRO, '') AS "TIP_PRO", 
+                DESC_PRO AS "DESC_PRO", 
+                STOCK_PRO AS "STOCK_PRO", 
+                CAST(COALESCE(PREC_PRO, 0) AS FLOAT) AS "PREC_PRO", 
+                COALESCE(ID_PROV, '') AS "ID_PROV" 
+            FROM PRODUCTOS
         `);
-        res.json(result.recordset);
+        res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: 'Error al obtener productos' });
     }
@@ -278,30 +313,27 @@ app.post('/api/proveedores', async (req, res) => {
 
         // Validar unicidad del RFC únicamente si fue proporcionado
         if (rfcLimpio) {
-            const checkReq = new sql.Request();
-            checkReq.input('rfc_check', sql.VarChar, rfcLimpio);
-            const check = await checkReq.query(`SELECT COUNT(*) as total FROM dbo.PROVEEDORES WHERE RFC_PROV = @rfc_check`);
-            if (check.recordset[0].total > 0) {
+            const check = await pool.query(`SELECT COUNT(*) AS "total" FROM PROVEEDORES WHERE RFC_PROV = $1`, [rfcLimpio]);
+            if (parseInt(check.rows[0].total) > 0) {
                 return res.status(400).json({ exito: false, error: 'Este proveedor con el mismo RFC ya está registrado.' });
             }
         }
 
-        const countResult = await (new sql.Request()).query('SELECT COUNT(*) as total FROM dbo.PROVEEDORES');
-        const id_prov = 'PRV-' + String(countResult.recordset[0].total + 1).padStart(3, '0');
+        const countResult = await pool.query('SELECT COUNT(*) AS "total" FROM PROVEEDORES');
+        const id_prov = 'PRV-' + String(parseInt(countResult.rows[0].total) + 1).padStart(3, '0');
 
-        const insertReq = new sql.Request();
-        insertReq.input('id_prov', sql.VarChar, id_prov);
-        insertReq.input('tip_sum', sql.VarChar, tip_sum && tip_sum.trim() ? tip_sum.trim() : null);
-        insertReq.input('nom_prov', sql.VarChar, nom_prov.trim());
-        insertReq.input('rfc_prov', sql.VarChar, rfcLimpio);
-        insertReq.input('dir_prov', sql.VarChar, dir_prov && dir_prov.trim() ? dir_prov.trim() : null);
-        insertReq.input('con_prov', sql.VarChar, con_prov && con_prov.trim() ? con_prov.trim() : null);
-        insertReq.input('pro_prov', sql.VarChar, pro_prov && pro_prov.trim() ? pro_prov.trim() : null);
-
-        await insertReq.query(`
-            INSERT INTO dbo.PROVEEDORES (ID_PROV, TIP_SUM, NOM_PROV, RFC_PROV, DIR_PROV, CON_PROV, PRO_PROV)
-            VALUES (@id_prov, @tip_sum, @nom_prov, @rfc_prov, @dir_prov, @con_prov, @pro_prov)
-        `);
+        await pool.query(`
+            INSERT INTO PROVEEDORES (ID_PROV, TIP_SUM, NOM_PROV, RFC_PROV, DIR_PROV, CON_PROV, PRO_PROV)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [
+            id_prov,
+            tip_sum && tip_sum.trim() ? tip_sum.trim() : null,
+            nom_prov.trim(),
+            rfcLimpio,
+            dir_prov && dir_prov.trim() ? dir_prov.trim() : null,
+            con_prov && con_prov.trim() ? con_prov.trim() : null,
+            pro_prov && pro_prov.trim() ? pro_prov.trim() : null
+        ]);
 
         res.json({ exito: true, mensaje: `Proveedor registrado con éxito (ID: ${id_prov})` });
     } catch (err) {
@@ -344,39 +376,36 @@ app.post('/api/clientes', async (req, res) => {
         }
 
         const nombreLimpio = nom_cli.trim();
-        const request = new sql.Request();
-        request.input('nom_cli_check', sql.NVarChar, nombreLimpio);
+        const check = await pool.query(`
+            SELECT COUNT(*) AS "total" 
+            FROM CLIENTES 
+            WHERE TRIM(LOWER(NOM_CLI)) = TRIM(LOWER($1))
+        `, [nombreLimpio]);
 
-        const check = await request.query(`
-            SELECT COUNT(*) as total 
-            FROM dbo.CLIENTES 
-            WHERE LTRIM(RTRIM(LOWER(NOM_CLI))) = LTRIM(RTRIM(LOWER(@nom_cli_check)))
-        `);
-
-        if (check.recordset[0].total > 0) {
+        if (parseInt(check.rows[0].total) > 0) {
             return res.status(400).json({ exito: false, error: `El cliente "${nombreLimpio}" ya se encuentra registrado.` });
         }
 
-        const countResult = await (new sql.Request()).query('SELECT COUNT(*) as total FROM dbo.CLIENTES');
-        const id_cli = 'CLI-' + String(countResult.recordset[0].total + 1).padStart(3, '0');
+        const countResult = await pool.query('SELECT COUNT(*) AS "total" FROM CLIENTES');
+        const id_cli = 'CLI-' + String(parseInt(countResult.rows[0].total) + 1).padStart(3, '0');
 
         const comLimpio = com_cli && com_cli.trim() ? sanitizarSqlYHtml(com_cli) : null;
         const prefLimpio = pref_cli && pref_cli.trim() ? sanitizarSqlYHtml(pref_cli) : null;
         const dirLimpio = dir_cli && dir_cli.trim() ? sanitizarSqlYHtml(dir_cli) : null;
 
-        const insertReq = new sql.Request();
-        insertReq.input('id_cli', sql.VarChar, id_cli);
-        insertReq.input('nom_cli', sql.NVarChar, nombreLimpio);
-        insertReq.input('dir_cli', sql.NVarChar, dirLimpio && dirLimpio.trim() ? dirLimpio.trim() : null);
-        insertReq.input('tel_cli', sql.VarChar, tel_cli && tel_cli.trim() ? tel_cli.trim() : null);
-        insertReq.input('cor_cli', sql.NVarChar, correoLimpio);
-        insertReq.input('com_cli', sql.NVarChar, comLimpio && comLimpio.trim() ? comLimpio.trim() : null);
-        insertReq.input('pref_cli', sql.NVarChar, prefLimpio && prefLimpio.trim() ? prefLimpio.trim() : null);
+        await pool.query(`
+            INSERT INTO CLIENTES (ID_CLI, NOM_CLI, DIR_CLI, TEL_CLI, COR_CLI, COM_CLI, PREF_CLI)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [
+            id_cli,
+            nombreLimpio,
+            dirLimpio && dirLimpio.trim() ? dirLimpio.trim() : null,
+            tel_cli && tel_cli.trim() ? tel_cli.trim() : null,
+            correoLimpio,
+            comLimpio && comLimpio.trim() ? comLimpio.trim() : null,
+            prefLimpio && prefLimpio.trim() ? prefLimpio.trim() : null
+        ]);
 
-        await insertReq.query(`
-            INSERT INTO dbo.CLIENTES (ID_CLI, NOM_CLI, DIR_CLI, TEL_CLI, COR_CLI, COM_CLI, PREF_CLI)
-            VALUES (@id_cli, @nom_cli, @dir_cli, @tel_cli, @cor_cli, @com_cli, @pref_cli)
-        `);
         res.json({ exito: true, mensaje: `Cliente registrado con éxito (ID: ${id_cli})` });
     } catch (err) {
         console.error('Error al registrar cliente:', err.message);
@@ -424,11 +453,9 @@ async function verificarAccesoAdmin(req, res) {
     const usuario = obtenerUsuarioSolicitante(req);
     if (usuario) {
         try {
-            const checkReq = new sql.Request();
-            checkReq.input('usr_auth_check', sql.NVarChar, usuario);
-            const userRes = await checkReq.query('SELECT ROL FROM dbo.USUARIOS WHERE USERNAME = @usr_auth_check');
-            if (userRes.recordset.length > 0) {
-                const rolDB = userRes.recordset[0].ROL;
+            const userRes = await pool.query('SELECT ROL AS "ROL" FROM USUARIOS WHERE USERNAME = $1', [usuario]);
+            if (userRes.rows.length > 0) {
+                const rolDB = userRes.rows[0].ROL;
                 if (rolDB && rolDB.toLowerCase() !== 'admin' && rolDB.toLowerCase() !== 'administrador') {
                     res.status(403).json({ 
                         exito: false, 
@@ -447,12 +474,10 @@ async function verificarAccesoAdmin(req, res) {
 // Empleados (CU-13 / CU-14 / CU-15 / CU-16 / CU-17 / CU-18 / RN-12 / RN-15 / RN-16 / RN-19 / RN-34 / RN-35)
 app.post('/api/empleados', async (req, res) => {
     try {
-        // Bloqueo de permisos en Backend (CU-18 / RN-34 / RN-35: Solo Administrador puede registrar empleados)
         const tienePermiso = await verificarAccesoAdmin(req, res);
         if (!tienePermiso) return;
         const { tip_emp, curp_emp, nom_emp, dir_emp, pue_emp, hor_emp, sue_emp } = req.body || {};
 
-        // Validación con trim() para evitar nombres vacíos o formados solo por espacios (CU-15 / RN-12)
         if (!nom_emp || typeof nom_emp !== 'string' || !nom_emp.trim()) {
             return res.status(400).json({ 
                 exito: false, 
@@ -462,7 +487,6 @@ app.post('/api/empleados', async (req, res) => {
 
         const nombreLimpio = nom_emp.trim();
 
-        // Validación de longitud máxima (CU-16 / RN-19: NOM_EMP VARCHAR(150))
         if (nombreLimpio.length > 150) {
             return res.status(400).json({
                 exito: false,
@@ -470,7 +494,6 @@ app.post('/api/empleados', async (req, res) => {
             });
         }
 
-        // Validación de sueldo no negativo (CU-17 / RN-16: SUELDO >= 0)
         let sueldoFinal = null;
         if (sue_emp !== undefined && sue_emp !== null && sue_emp !== '') {
             const numSueldo = parseFloat(sue_emp);
@@ -485,33 +508,30 @@ app.post('/api/empleados', async (req, res) => {
 
         const curpLimpio = curp_emp && typeof curp_emp === 'string' && curp_emp.trim() ? curp_emp.trim().toUpperCase() : null;
 
-        // Validar unicidad de CURP únicamente cuando se proporciona (RN-15 / CU-14)
         if (curpLimpio) {
-            const checkReq = new sql.Request();
-            checkReq.input('curp_check', sql.VarChar, curpLimpio);
-            const check = await checkReq.query(`SELECT COUNT(*) as total FROM dbo.EMPLEADOS WHERE UPPER(CURP_EMP) = @curp_check`);
-            if (check.recordset[0].total > 0) {
+            const check = await pool.query(`SELECT COUNT(*) AS "total" FROM EMPLEADOS WHERE UPPER(CURP_EMP) = $1`, [curpLimpio]);
+            if (parseInt(check.rows[0].total) > 0) {
                 return res.status(400).json({ exito: false, error: `El empleado con CURP "${curpLimpio}" ya está registrado.` });
             }
         }
 
-        const countResult = await (new sql.Request()).query('SELECT COUNT(*) as total FROM dbo.EMPLEADOS');
-        const id_emp = 'EMP-' + String(countResult.recordset[0].total + 1).padStart(3, '0');
+        const countResult = await pool.query('SELECT COUNT(*) AS "total" FROM EMPLEADOS');
+        const id_emp = 'EMP-' + String(parseInt(countResult.rows[0].total) + 1).padStart(3, '0');
 
-        const insertReq = new sql.Request();
-        insertReq.input('id_emp', sql.VarChar, id_emp);
-        insertReq.input('tip_emp', sql.VarChar, tip_emp && tip_emp.trim() ? tip_emp.trim() : null);
-        insertReq.input('curp_emp', sql.VarChar, curpLimpio);
-        insertReq.input('nom_emp', sql.NVarChar, nombreLimpio);
-        insertReq.input('dir_emp', sql.NVarChar, dir_emp && dir_emp.trim() ? dir_emp.trim() : null);
-        insertReq.input('pue_emp', sql.NVarChar, pue_emp && pue_emp.trim() ? pue_emp.trim() : null);
-        insertReq.input('hor_emp', sql.NVarChar, hor_emp && hor_emp.trim() ? hor_emp.trim() : null);
-        insertReq.input('sue_emp', sql.Float, sueldoFinal);
+        await pool.query(`
+            INSERT INTO EMPLEADOS (ID_EMP, TIP_EMP, CURP_EMP, NOM_EMP, DIR_EMP, PUE_EMP, HOR_EMP, SUE_EMP, INI_ALTA, FIN_ALTA)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), '2099-12-31')
+        `, [
+            id_emp,
+            tip_emp && tip_emp.trim() ? tip_emp.trim() : null,
+            curpLimpio,
+            nombreLimpio,
+            dir_emp && dir_emp.trim() ? dir_emp.trim() : null,
+            pue_emp && pue_emp.trim() ? pue_emp.trim() : null,
+            hor_emp && hor_emp.trim() ? hor_emp.trim() : null,
+            sueldoFinal
+        ]);
 
-        await insertReq.query(`
-            INSERT INTO dbo.EMPLEADOS (ID_EMP, TIP_EMP, CURP_EMP, NOM_EMP, DIR_EMP, PUE_EMP, HOR_EMP, SUE_EMP, INI_ALTA, FIN_ALTA)
-            VALUES (@id_emp, @tip_emp, @curp_emp, @nom_emp, @dir_emp, @pue_emp, @hor_emp, @sue_emp, GETDATE(), '2099-12-31')
-        `);
         res.json({ exito: true, mensaje: `Empleado registrado con éxito (ID: ${id_emp})` });
     } catch (err) {
         console.error('Error al registrar empleado:', err.message);
@@ -553,7 +573,7 @@ const validacionesCatalogoServicio = [
         })
 ];
 
-// Catálogo de Servicios (CU-14 / CU-40 / CU-41 / RN-12 / RN-16 / RN-33 / RN-34 / RN-35 / V-01 / V-07: Actor exclusivo Administrador; NOM_SERV obligatorio con trim(); DESC_SERV opcional TEXT; Costo >= 0 por defecto 0; consultas parametrizadas)
+// Catálogo de Servicios (CU-14 / CU-40 / CU-41 / RN-12 / RN-16 / RN-33 / RN-34 / RN-35 / V-01 / V-07)
 app.post('/api/catalogo-servicios', validacionesCatalogoServicio, async (req, res) => {
     try {
         const errors = validationResult(req);
@@ -564,13 +584,11 @@ app.post('/api/catalogo-servicios', validacionesCatalogoServicio, async (req, re
             });
         }
 
-        // Control de Acceso por Rol (CU-14 / CU-40 / RN-34 / RN-35: Actor exclusivo Administrador)
         const tienePermiso = await verificarAccesoAdmin(req, res);
         if (!tienePermiso) return;
 
         const { nom_serv, desc_serv, costo_est } = req.body || {};
         
-        // Validación con trim() para evitar nombres vacíos o formados solo por espacios (CU-38 / RN-12: NOM_SERV NOT NULL)
         if (!nom_serv || typeof nom_serv !== 'string' || !nom_serv.trim()) {
             return res.status(400).json({ 
                 exito: false, 
@@ -580,7 +598,6 @@ app.post('/api/catalogo-servicios', validacionesCatalogoServicio, async (req, re
 
         const nombreLimpio = nom_serv.trim();
 
-        // Validación de inyección SQL y etiquetas HTML (V-01 / V-07)
         if (contieneSqlOHtml(nombreLimpio)) {
             return res.status(400).json({ 
                 exito: false, 
@@ -595,7 +612,6 @@ app.post('/api/catalogo-servicios', validacionesCatalogoServicio, async (req, re
             });
         }
 
-        // RN-16 / RN-33 / CU-39: El costo estándar no acepta valores negativos, debe ser mayor o igual a 0 (por defecto 0)
         const costoEntrada = costo_est !== undefined ? costo_est : (req.body?.costo !== undefined ? req.body?.costo : req.body?.COSTO_EST);
         let costoFinal = 0;
         if (costoEntrada !== undefined && costoEntrada !== null && costoEntrada !== '') {
@@ -611,29 +627,21 @@ app.post('/api/catalogo-servicios', validacionesCatalogoServicio, async (req, re
             costoFinal = numCosto;
         }
 
-        // CU-37: DESC_SERV es TEXT opcional (si no se proporciona o viene vacío, se guarda NULL)
         const descLimpia = desc_serv && typeof desc_serv === 'string' && desc_serv.trim() ? desc_serv.trim() : null;
 
-        const checkReq = new sql.Request();
-        checkReq.input('nom_serv_check', sql.NVarChar, nombreLimpio);
-        const check = await checkReq.query(`SELECT COUNT(*) as total FROM dbo.CAT_SERVICIOS WHERE LTRIM(RTRIM(LOWER(NOM_SERV))) = LTRIM(RTRIM(LOWER(@nom_serv_check)))`);
-        if (check.recordset[0].total > 0) {
+        const check = await pool.query(`SELECT COUNT(*) AS "total" FROM CAT_SERVICIOS WHERE TRIM(LOWER(NOM_SERV)) = TRIM(LOWER($1))`, [nombreLimpio]);
+        if (parseInt(check.rows[0].total) > 0) {
             return res.status(400).json({ exito: false, error: `El servicio "${nombreLimpio}" ya existe en el catálogo.` });
         }
 
-        const countResult = await (new sql.Request()).query('SELECT COUNT(*) as total FROM dbo.CAT_SERVICIOS');
-        const id_cat = 'CSV-' + String(countResult.recordset[0].total + 1).padStart(3, '0');
+        const countResult = await pool.query('SELECT COUNT(*) AS "total" FROM CAT_SERVICIOS');
+        const id_cat = 'CSV-' + String(parseInt(countResult.rows[0].total) + 1).padStart(3, '0');
 
-        const insertReq = new sql.Request();
-        insertReq.input('id_cat_serv', sql.VarChar, id_cat);
-        insertReq.input('nom_serv', sql.NVarChar, nombreLimpio);
-        insertReq.input('desc_serv', sql.NVarChar, descLimpia);
-        insertReq.input('costo_est', sql.Float, costoFinal);
+        await pool.query(`
+            INSERT INTO CAT_SERVICIOS (ID_CAT_SERV, NOM_SERV, DESC_SERV, COSTO_EST)
+            VALUES ($1, $2, $3, $4)
+        `, [id_cat, nombreLimpio, descLimpia, costoFinal]);
 
-        await insertReq.query(`
-            INSERT INTO dbo.CAT_SERVICIOS (ID_CAT_SERV, NOM_SERV, DESC_SERV, COSTO_EST)
-            VALUES (@id_cat_serv, @nom_serv, @desc_serv, @costo_est)
-        `);
         res.json({ exito: true, mensaje: `Servicio agregado al catálogo con éxito (ID: ${id_cat})` });
     } catch (err) {
         console.error('Error al guardar en catálogo:', err.message);
@@ -641,12 +649,11 @@ app.post('/api/catalogo-servicios', validacionesCatalogoServicio, async (req, re
     }
 });
 
-// Productos (CU-19 / CU-20 / CU-21 / CU-22 / RN-16 / RN-17 / RN-31 / CU-08 FA-02 / CU-08 FA-03: Solo DESC_PRO y ID_PROV obligatorios; STOCK entero >= 0 y PRECIO >= 0 por defecto 0; TIPO opcional)
+// Productos (CU-19 / CU-20 / CU-21 / CU-22 / RN-16 / RN-17 / RN-31 / CU-08 FA-02 / CU-08 FA-03)
 app.post('/api/productos', async (req, res) => {
     try {
         const { tip_pro, desc_pro, stock_pro, prec_pro, id_prov } = req.body || {};
 
-        // Validación con trim() para evitar descripciones vacías o compuestas solo por espacios (CU-20 / CU-08 FA-03 / DESC_PRO NOT NULL)
         if (!desc_pro || typeof desc_pro !== 'string' || !desc_pro.trim()) {
             return res.status(400).json({ 
                 exito: false, 
@@ -658,7 +665,6 @@ app.post('/api/productos', async (req, res) => {
             return res.status(400).json({ exito: false, error: 'El proveedor es obligatorio.' });
         }
 
-        // Validación de precio no negativo (CU-21 / RN-16 / CU-08 FA-02)
         let precioFinal = 0;
         if (prec_pro !== undefined && prec_pro !== null && prec_pro !== '') {
             const numPrecio = parseFloat(prec_pro);
@@ -671,7 +677,6 @@ app.post('/api/productos', async (req, res) => {
             precioFinal = numPrecio;
         }
 
-        // Validación de stock entero mayor o igual a 0 (CU-22 / RN-17 / RN-31)
         let stockFinal = 0;
         if (stock_pro !== undefined && stock_pro !== null && stock_pro !== '') {
             const numStock = Number(stock_pro);
@@ -684,44 +689,32 @@ app.post('/api/productos', async (req, res) => {
             stockFinal = numStock;
         }
 
-        // Verificar que el proveedor exista
-        const checkProvReq = new sql.Request();
-        checkProvReq.input('id_prov_check', sql.VarChar, id_prov.trim());
-        const provCheck = await checkProvReq.query(`SELECT COUNT(*) as total FROM dbo.PROVEEDORES WHERE ID_PROV = @id_prov_check`);
-        if (provCheck.recordset[0].total === 0) {
+        const provCheck = await pool.query(`SELECT COUNT(*) AS "total" FROM PROVEEDORES WHERE ID_PROV = $1`, [id_prov.trim()]);
+        if (parseInt(provCheck.rows[0].total) === 0) {
             return res.status(400).json({ exito: false, error: 'El proveedor seleccionado no existe en el sistema.' });
         }
 
         const descripcionLimpia = desc_pro.trim();
         const tipoFinal = tip_pro && typeof tip_pro === 'string' && tip_pro.trim() ? tip_pro.trim() : '';
 
-        const checkDescReq = new sql.Request();
-        checkDescReq.input('desc_check', sql.NVarChar, descripcionLimpia);
-        const check = await checkDescReq.query(`
-            SELECT COUNT(*) as total 
-            FROM dbo.PRODUCTOS 
-            WHERE LTRIM(RTRIM(LOWER(DESC_PRO))) = LTRIM(RTRIM(LOWER(@desc_check)))
-        `);
+        const check = await pool.query(`
+            SELECT COUNT(*) AS "total" 
+            FROM PRODUCTOS 
+            WHERE TRIM(LOWER(DESC_PRO)) = TRIM(LOWER($1))
+        `, [descripcionLimpia]);
 
-        if (check.recordset[0].total > 0) {
+        if (parseInt(check.rows[0].total) > 0) {
             return res.status(400).json({ exito: false, error: `El producto "${descripcionLimpia}" ya existe en el inventario.` });
         }
 
-        const countResult = await (new sql.Request()).query('SELECT COUNT(*) as total FROM dbo.PRODUCTOS');
-        const id_pro = 'PRO-' + String(countResult.recordset[0].total + 1).padStart(3, '0');
+        const countResult = await pool.query('SELECT COUNT(*) AS "total" FROM PRODUCTOS');
+        const id_pro = 'PRO-' + String(parseInt(countResult.rows[0].total) + 1).padStart(3, '0');
 
-        const insertReq = new sql.Request();
-        insertReq.input('id_pro', sql.VarChar, id_pro);
-        insertReq.input('tip_pro', sql.NVarChar, tipoFinal);
-        insertReq.input('desc_pro', sql.NVarChar, descripcionLimpia);
-        insertReq.input('stock_pro', sql.Int, isNaN(stockFinal) ? 0 : stockFinal);
-        insertReq.input('prec_pro', sql.Float, isNaN(precioFinal) ? 0 : precioFinal);
-        insertReq.input('id_prov', sql.VarChar, id_prov.trim());
+        await pool.query(`
+            INSERT INTO PRODUCTOS (ID_PRO, TIP_PRO, DESC_PRO, STOCK_PRO, PREC_PRO, ID_PROV)
+            VALUES ($1, $2, $3, $4, $5, $6)
+        `, [id_pro, tipoFinal, descripcionLimpia, isNaN(stockFinal) ? 0 : stockFinal, isNaN(precioFinal) ? 0 : precioFinal, id_prov.trim()]);
 
-        await insertReq.query(`
-            INSERT INTO dbo.PRODUCTOS (ID_PRO, TIP_PRO, DESC_PRO, STOCK_PRO, PREC_PRO, ID_PROV)
-            VALUES (@id_pro, @tip_pro, @desc_pro, @stock_pro, @prec_pro, @id_prov)
-        `);
         res.json({ exito: true, mensaje: `Producto registrado con éxito (ID: ${id_pro})` });
     } catch (err) {
         console.error('Error al registrar producto:', err.message);
@@ -801,7 +794,7 @@ const validacionesPlanta = [
         })
 ];
 
-// Plantas (CU-23 / CU-24 / CU-25 / RN-12 / RN-16 / RN-17 / RN-31 / CP-12 / V-01 / V-07: Solo nombre científico, nombre común y proveedor obligatorios; consultas parametrizadas y sanitización con express-validator)
+// Plantas (CU-23 / CU-24 / CU-25 / RN-12 / RN-16 / RN-17 / RN-31 / CP-12 / V-01 / V-07)
 app.post('/api/plantas', validacionesPlanta, async (req, res) => {
     try {
         const errors = validationResult(req);
@@ -831,7 +824,6 @@ app.post('/api/plantas', validacionesPlanta, async (req, res) => {
         const tipoFinal = tipo && typeof tipo === 'string' && tipo.trim() ? tipo.trim() : null;
         const tamanoFinal = (tamano !== undefined && tamano !== null && tamano !== '') ? parseFloat(tamano) : null;
 
-        // Validación de stock entero mayor o igual a 0 (CU-24 / RN-17 / RN-31 / CP-12)
         let stockFinal = 0;
         if (stock !== undefined && stock !== null && stock !== '') {
             const numStock = Number(stock);
@@ -844,7 +836,6 @@ app.post('/api/plantas', validacionesPlanta, async (req, res) => {
             stockFinal = numStock;
         }
 
-        // Precio por defecto 0 (RN-31 / RN-16)
         let precioFinal = 0;
         if (precio !== undefined && precio !== null && precio !== '') {
             const numPrecio = parseFloat(precio);
@@ -857,45 +848,38 @@ app.post('/api/plantas', validacionesPlanta, async (req, res) => {
             precioFinal = numPrecio;
         }
 
-        // Verificar que el proveedor exista (Consulta parametrizada - V-01)
-        const checkProvReq = new sql.Request();
-        checkProvReq.input('id_prov_check', sql.VarChar, proveedor.trim());
-        const provCheck = await checkProvReq.query(`SELECT COUNT(*) as total FROM dbo.PROVEEDORES WHERE ID_PROV = @id_prov_check`);
-        if (provCheck.recordset[0].total === 0) {
+        const provCheck = await pool.query(`SELECT COUNT(*) AS "total" FROM PROVEEDORES WHERE ID_PROV = $1`, [proveedor.trim()]);
+        if (parseInt(provCheck.rows[0].total) === 0) {
             return res.status(400).json({ exito: false, error: 'El proveedor seleccionado no existe en el sistema.' });
         }
 
-        // Verificar duplicados de nombre científico con consulta parametrizada (V-01)
-        const checkReq = new sql.Request();
-        checkReq.input('cientifico_check', sql.NVarChar, cientificoLimpio);
-        const check = await checkReq.query(`
-            SELECT COUNT(*) as total 
-            FROM dbo.PLANTAS 
-            WHERE LTRIM(RTRIM(LOWER(NOM_CTFO))) = LTRIM(RTRIM(LOWER(@cientifico_check)))
-        `);
+        const check = await pool.query(`
+            SELECT COUNT(*) AS "total" 
+            FROM PLANTAS 
+            WHERE TRIM(LOWER(NOM_CTFO)) = TRIM(LOWER($1))
+        `, [cientificoLimpio]);
 
-        if (check.recordset[0].total > 0) {
+        if (parseInt(check.rows[0].total) > 0) {
             return res.status(400).json({ exito: false, error: `La planta "${cientificoLimpio}" ya se encuentra registrada.` });
         }
 
-        const countResult = await (new sql.Request()).query('SELECT COUNT(*) as total FROM dbo.PLANTAS');
-        const id_planta = 'PLN-' + String(countResult.recordset[0].total + 1).padStart(3, '0');
+        const countResult = await pool.query('SELECT COUNT(*) AS "total" FROM PLANTAS');
+        const id_planta = 'PLN-' + String(parseInt(countResult.rows[0].total) + 1).padStart(3, '0');
 
-        // Inserción parametrizada contra Inyección SQL (V-01)
-        const insertReq = new sql.Request();
-        insertReq.input('id_planta', sql.VarChar, id_planta);
-        insertReq.input('tip_planta', sql.NVarChar, tipoFinal);
-        insertReq.input('nom_ctfo', sql.NVarChar, cientificoLimpio);
-        insertReq.input('nom_com', sql.NVarChar, comunLimpio);
-        insertReq.input('tam_plant', sql.NVarChar, tamanoFinal !== null ? String(tamanoFinal) : null);
-        insertReq.input('stock_plant', sql.Int, stockFinal);
-        insertReq.input('prov_plant', sql.VarChar, proveedor.trim());
-        insertReq.input('prec_planta', sql.Float, precioFinal);
+        await pool.query(`
+            INSERT INTO PLANTAS (ID_PLANTA, TIP_PLANTA, NOM_CTFO, NOM_COM, TAM_PLANT, STOCK_PLANT, PROV_PLANT, PREC_PLANTA)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `, [
+            id_planta,
+            tipoFinal,
+            cientificoLimpio,
+            comunLimpio,
+            tamanoFinal !== null ? String(tamanoFinal) : null,
+            stockFinal,
+            proveedor.trim(),
+            precioFinal
+        ]);
 
-        await insertReq.query(`
-            INSERT INTO dbo.PLANTAS (ID_PLANTA, TIP_PLANTA, NOM_CTFO, NOM_COM, TAM_PLANT, STOCK_PLANT, PROV_PLANT, PREC_PLANTA)
-            VALUES (@id_planta, @tip_planta, @nom_ctfo, @nom_com, @tam_plant, @stock_plant, @prov_plant, @prec_planta)
-        `);
         res.json({ exito: true, mensaje: `Planta registrada con éxito (ID: ${id_planta})` });
     } catch (err) {
         console.error('Error al registrar planta:', err.message);
@@ -903,7 +887,7 @@ app.post('/api/plantas', validacionesPlanta, async (req, res) => {
     }
 });
 
-// Función auxiliar para normalizar fechas en formatos DD/MM/YYYY, YYYY-MM-DD o ISO a formato SQL YYYY-MM-DD
+// Función auxiliar para normalizar fechas
 function normalizarFechaSQL(valor) {
     if (!valor) return null;
     if (valor instanceof Date && !isNaN(valor.getTime())) {
@@ -911,7 +895,6 @@ function normalizarFechaSQL(valor) {
     }
     if (typeof valor === 'string') {
         const str = valor.trim();
-        // Caso DD/MM/YYYY o DD-MM-YYYY (ej. 27/10/2026)
         const matchDMY = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
         if (matchDMY) {
             const dia = matchDMY[1].padStart(2, '0');
@@ -919,7 +902,6 @@ function normalizarFechaSQL(valor) {
             const anio = matchDMY[3];
             return `${anio}-${mes}-${dia}`;
         }
-        // Caso YYYY-MM-DD o YYYY/MM/DD
         const matchYMD = str.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
         if (matchYMD) {
             const anio = matchYMD[1];
@@ -1009,7 +991,6 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
             });
         }
 
-        // Validación de permisos (CU-13 / CU-33: Actores autorizados: Admin y Empleado)
         const rolSolicitante = obtenerRolSolicitante(req);
         if (rolSolicitante) {
             const rolNorm = rolSolicitante.toLowerCase();
@@ -1024,7 +1005,6 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
 
         const { id_serv, id_cli, trabajo, trab_real, trabalho, fecha_ejec, fecha, costo, costo_serv, id_emp } = req.body || {};
 
-        // 1. Obtener y validar el trabajo realizado (soporta trabajo, trab_real, trabalho o descripciones)
         const trabajoEntrada = trabajo || trab_real || trabalho || req.body?.TRAB_REAL || req.body?.desc_serv || req.body?.descripcion;
         if (!trabajoEntrada || typeof trabajoEntrada !== 'string' || !trabajoEntrada.trim()) {
             return res.status(400).json({ 
@@ -1033,7 +1013,6 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
             });
         }
 
-        // Validación y desinfección de entradas contra Inyección SQL y HTML (CU-36 / V-01 / V-07)
         if (contieneSqlOHtml(trabajoEntrada)) {
             return res.status(400).json({ 
                 exito: false, 
@@ -1043,7 +1022,6 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
 
         const trabajoLimpio = trabajoEntrada.trim();
 
-        // Validación de longitud máxima (CU-35 / RN-19: TRAB_REAL VARCHAR(200) permite hasta 200 caracteres)
         if (trabajoLimpio.length > 200) {
             return res.status(400).json({ 
                 exito: false, 
@@ -1051,7 +1029,6 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
             });
         }
 
-        // Validación de SQL/HTML en cliente y empleado si se proporcionaron
         const idCliEntrada = id_cli || req.body?.id_cliente || req.body?.ID_CLI;
         if (idCliEntrada && contieneSqlOHtml(String(idCliEntrada))) {
             return res.status(400).json({ 
@@ -1076,10 +1053,8 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
             });
         }
 
-        // 2. Normalizar fecha (soporta DD/MM/YYYY como 27/10/2026, YYYY-MM-DD, o actual por defecto)
         const fechaNormalizada = normalizarFechaSQL(fechaEntrada) || new Date().toISOString().split('T')[0];
 
-        // 3. Validar costo (CU-34 / RN-16 / RN-33: Permite costo $0, revisión de garantía sin costo; valor por defecto 0)
         const costoEntrada = costo !== undefined ? costo : (costo_serv !== undefined ? costo_serv : req.body?.costo_est);
         let costoFinal = 0;
         if (costoEntrada !== undefined && costoEntrada !== null && costoEntrada !== '') {
@@ -1095,26 +1070,22 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
             costoFinal = numCosto;
         }
 
-        // 4. Resolver cliente (si se envía se usa; si no se envía en pruebas directas, se asigna el primer cliente válido)
         let clienteFinal = idCliEntrada && typeof idCliEntrada === 'string' && idCliEntrada.trim() ? idCliEntrada.trim() : null;
         if (!clienteFinal) {
-            const cliRes = await (new sql.Request()).query('SELECT TOP 1 ID_CLI FROM dbo.CLIENTES ORDER BY ID_CLI ASC');
-            if (cliRes.recordset.length > 0) {
-                clienteFinal = cliRes.recordset[0].ID_CLI;
+            const cliRes = await pool.query('SELECT ID_CLI AS "ID_CLI" FROM CLIENTES ORDER BY ID_CLI ASC LIMIT 1');
+            if (cliRes.rows.length > 0) {
+                clienteFinal = cliRes.rows[0].ID_CLI;
             }
         }
 
-        // 5. Resolver empleado responsable (CU-13 / CU-33: Si Kimachang u otro usuario Empleado está logueado, resolver su ID_EMP asociado)
         const usuarioSolicitante = obtenerUsuarioSolicitante(req) || req.body?.cajero || req.body?.usuario;
         let empleadoFinal = idEmpEntrada && typeof idEmpEntrada === 'string' && idEmpEntrada.trim() ? idEmpEntrada.trim() : null;
         
         if (!empleadoFinal && usuarioSolicitante) {
             try {
-                const userEmpReq = new sql.Request();
-                userEmpReq.input('usr_emp_check', sql.NVarChar, usuarioSolicitante.trim());
-                const userEmpRes = await userEmpReq.query('SELECT ID_EMP FROM dbo.USUARIOS WHERE USERNAME = @usr_emp_check');
-                if (userEmpRes.recordset.length > 0 && userEmpRes.recordset[0].ID_EMP) {
-                    empleadoFinal = userEmpRes.recordset[0].ID_EMP;
+                const userEmpRes = await pool.query('SELECT ID_EMP AS "ID_EMP" FROM USUARIOS WHERE USERNAME = $1', [usuarioSolicitante.trim()]);
+                if (userEmpRes.rows.length > 0 && userEmpRes.rows[0].ID_EMP) {
+                    empleadoFinal = userEmpRes.rows[0].ID_EMP;
                 }
             } catch (e) {
                 console.error('Error al consultar ID_EMP del usuario:', e.message);
@@ -1122,19 +1093,18 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
         }
 
         if (!empleadoFinal) {
-            const empRes = await (new sql.Request()).query('SELECT TOP 1 ID_EMP FROM dbo.EMPLEADOS ORDER BY ID_EMP ASC');
-            if (empRes.recordset.length > 0) {
-                empleadoFinal = empRes.recordset[0].ID_EMP;
+            const empRes = await pool.query('SELECT ID_EMP AS "ID_EMP" FROM EMPLEADOS ORDER BY ID_EMP ASC LIMIT 1');
+            if (empRes.rows.length > 0) {
+                empleadoFinal = empRes.rows[0].ID_EMP;
             }
         }
 
-        // 6. Generar ID_SERV único secuencial sin riesgo de colisión
         let id_servicio = id_serv && typeof id_serv === 'string' && id_serv.trim() ? id_serv.trim() : null;
         if (!id_servicio) {
-            const lastServ = await (new sql.Request()).query('SELECT TOP 1 ID_SERV FROM dbo.SERVICIOS ORDER BY LEN(ID_SERV) DESC, ID_SERV DESC');
+            const lastServ = await pool.query('SELECT ID_SERV AS "ID_SERV" FROM SERVICIOS ORDER BY LENGTH(ID_SERV) DESC, ID_SERV DESC LIMIT 1');
             let nextId = 1;
-            if (lastServ.recordset.length > 0 && lastServ.recordset[0].ID_SERV) {
-                const lastIdStr = lastServ.recordset[0].ID_SERV.replace('SRV-', '');
+            if (lastServ.rows.length > 0 && lastServ.rows[0].ID_SERV) {
+                const lastIdStr = lastServ.rows[0].ID_SERV.replace('SRV-', '');
                 const parsedId = parseInt(lastIdStr);
                 if (!isNaN(parsedId)) {
                     nextId = parsedId + 1;
@@ -1143,19 +1113,10 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
             id_servicio = 'SRV-' + String(nextId).padStart(3, '0');
         }
 
-        // 7. Consulta INSERT parametrizada contra Inyección SQL (V-01)
-        const insertReq = new sql.Request();
-        insertReq.input('id_servicio', sql.VarChar, id_servicio);
-        insertReq.input('id_cli', sql.VarChar, clienteFinal);
-        insertReq.input('trab_real', sql.NVarChar, trabajoLimpio);
-        insertReq.input('fecha_ejec', sql.VarChar, fechaNormalizada);
-        insertReq.input('costo_serv', sql.Float, costoFinal);
-        insertReq.input('id_emp', sql.VarChar, empleadoFinal);
-
-        await insertReq.query(`
-            INSERT INTO dbo.SERVICIOS (ID_SERV, ID_CLI, TRAB_REAL, FECHA_EJEC, COSTO_SERV, ID_EMP)
-            VALUES (@id_servicio, @id_cli, @trab_real, ISNULL(TRY_CONVERT(DATETIME, @fecha_ejec, 120), GETDATE()), @costo_serv, @id_emp)
-        `);
+        await pool.query(`
+            INSERT INTO SERVICIOS (ID_SERV, ID_CLI, TRAB_REAL, FECHA_EJEC, COSTO_SERV, ID_EMP)
+            VALUES ($1, $2, $3, $4::timestamp, $5, $6)
+        `, [id_servicio, clienteFinal, trabajoLimpio, fechaNormalizada, costoFinal, empleadoFinal]);
 
         res.json({ 
             exito: true, 
@@ -1176,7 +1137,7 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
     }
 });
 
-// Pedidos (Registrar) (CU-28 / CU-29 / RN-23 / CU-11: Validación de existencia de producto, planta y llaves foráneas; consultas parametrizadas)
+// Pedidos (Registrar) (CU-28 / CU-29 / RN-23 / CU-11)
 app.post('/api/pedidos', async (req, res) => {
     try {
         const { tip_ped, tip_env, dir_envio, id_cli, id_pro, num_can, id_planta, num_can_plant, id_rep, tiem_entrega, tot_pedido } = req.body || {};
@@ -1200,12 +1161,9 @@ app.post('/api/pedidos', async (req, res) => {
             return res.status(400).json({ exito: false, error: 'Debe seleccionar al menos un producto o una planta para el pedido.' });
         }
 
-        // Validación de existencia de producto (CU-28 / RN-23 / CU-11)
         if (idProLimpio) {
-            const checkProReq = new sql.Request();
-            checkProReq.input('id_pro_check', sql.VarChar, idProLimpio);
-            const proCheck = await checkProReq.query('SELECT COUNT(*) as total FROM dbo.PRODUCTOS WHERE ID_PRO = @id_pro_check');
-            if (proCheck.recordset[0].total === 0) {
+            const proCheck = await pool.query('SELECT COUNT(*) AS "total" FROM PRODUCTOS WHERE ID_PRO = $1', [idProLimpio]);
+            if (parseInt(proCheck.rows[0].total) === 0) {
                 return res.status(400).json({ 
                     exito: false, 
                     error: `El producto seleccionado (${idProLimpio}) no existe en el sistema (RN-23).` 
@@ -1213,12 +1171,9 @@ app.post('/api/pedidos', async (req, res) => {
             }
         }
 
-        // Validación de existencia de planta si se proporciona (CU-28 / CU-29 / RN-23 / CU-11)
         if (idPlantaLimpio) {
-            const checkPlantaReq = new sql.Request();
-            checkPlantaReq.input('id_planta_check', sql.VarChar, idPlantaLimpio);
-            const plantaCheck = await checkPlantaReq.query('SELECT COUNT(*) as total FROM dbo.PLANTAS WHERE ID_PLANTA = @id_planta_check');
-            if (plantaCheck.recordset[0].total === 0) {
+            const plantaCheck = await pool.query('SELECT COUNT(*) AS "total" FROM PLANTAS WHERE ID_PLANTA = $1', [idPlantaLimpio]);
+            if (parseInt(plantaCheck.rows[0].total) === 0) {
                 return res.status(400).json({ 
                     exito: false, 
                     error: `La planta seleccionada (${idPlantaLimpio}) no existe en el sistema (RN-23).` 
@@ -1226,45 +1181,38 @@ app.post('/api/pedidos', async (req, res) => {
             }
         }
 
-        // Validación de existencia de cliente (CU-11)
-        const checkCliReq = new sql.Request();
-        checkCliReq.input('id_cli_check', sql.VarChar, id_cli.trim());
-        const cliCheck = await checkCliReq.query('SELECT COUNT(*) as total FROM dbo.CLIENTES WHERE ID_CLI = @id_cli_check');
-        if (cliCheck.recordset[0].total === 0) {
+        const cliCheck = await pool.query('SELECT COUNT(*) AS "total" FROM CLIENTES WHERE ID_CLI = $1', [id_cli.trim()]);
+        if (parseInt(cliCheck.rows[0].total) === 0) {
             return res.status(400).json({ exito: false, error: 'El cliente seleccionado no existe en el sistema.' });
         }
 
-        // Validación de existencia de repartidor (CU-11)
         if (id_rep && typeof id_rep === 'string' && id_rep.trim()) {
-            const checkRepReq = new sql.Request();
-            checkRepReq.input('id_rep_check', sql.VarChar, id_rep.trim());
-            const repCheck = await checkRepReq.query('SELECT COUNT(*) as total FROM dbo.EMPLEADOS WHERE ID_EMP = @id_rep_check');
-            if (repCheck.recordset[0].total === 0) {
+            const repCheck = await pool.query('SELECT COUNT(*) AS "total" FROM EMPLEADOS WHERE ID_EMP = $1', [id_rep.trim()]);
+            if (parseInt(repCheck.rows[0].total) === 0) {
                 return res.status(400).json({ exito: false, error: 'El repartidor seleccionado no existe en el sistema.' });
             }
         }
 
-        const countResult = await (new sql.Request()).query('SELECT COUNT(*) as total FROM dbo.PEDIDOS');
-        const id_ped = 'PED-' + String(countResult.recordset[0].total + 1).padStart(3, '0');
+        const countResult = await pool.query('SELECT COUNT(*) AS "total" FROM PEDIDOS');
+        const id_ped = 'PED-' + String(parseInt(countResult.rows[0].total) + 1).padStart(3, '0');
 
-        const insertReq = new sql.Request();
-        insertReq.input('id_ped', sql.VarChar, id_ped);
-        insertReq.input('tip_ped', sql.NVarChar, tip_ped.trim());
-        insertReq.input('tip_env', sql.NVarChar, tip_env.trim());
-        insertReq.input('dir_envio', sql.NVarChar, dir_envio && dir_envio.trim() ? dir_envio.trim() : null);
-        insertReq.input('id_cli', sql.VarChar, id_cli.trim());
-        insertReq.input('id_pro', sql.VarChar, idProLimpio);
-        insertReq.input('num_can', sql.Int, idProLimpio ? (parseInt(num_can) || 0) : null);
-        insertReq.input('id_planta', sql.VarChar, idPlantaLimpio);
-        insertReq.input('num_can_plant', sql.Int, idPlantaLimpio ? (parseInt(num_can_plant) || 0) : null);
-        insertReq.input('id_rep', sql.VarChar, id_rep && id_rep.trim() ? id_rep.trim() : null);
-        insertReq.input('tiem_entrega', sql.NVarChar, tiem_entrega && tiem_entrega.trim() ? tiem_entrega.trim() : 'N/A');
-        insertReq.input('tot_pedido', sql.Float, parseFloat(tot_pedido) || 0);
-
-        await insertReq.query(`
-            INSERT INTO dbo.PEDIDOS (ID_PED, TIP_PED, TIP_ENV, DIR_ENVIO, ID_CLI, ID_PRO, NUM_CAN, ID_PLANTA, NUM_CAN_PLANT, ID_REP, TIEM_ENTREGA, TOT_PEDIDO)
-            VALUES (@id_ped, @tip_ped, @tip_env, @dir_envio, @id_cli, @id_pro, @num_can, @id_planta, @num_can_plant, @id_rep, @tiem_entrega, @tot_pedido)
-        `);
+        await pool.query(`
+            INSERT INTO PEDIDOS (ID_PED, TIP_PED, TIP_ENV, DIR_ENVIO, ID_CLI, ID_PRO, NUM_CAN, ID_PLANTA, NUM_CAN_PLANT, ID_REP, TIEM_ENTREGA, TOT_PEDIDO)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        `, [
+            id_ped,
+            tip_ped.trim(),
+            tip_env.trim(),
+            dir_envio && dir_envio.trim() ? dir_envio.trim() : null,
+            id_cli.trim(),
+            idProLimpio,
+            idProLimpio ? (parseInt(num_can) || 0) : null,
+            idPlantaLimpio,
+            idPlantaLimpio ? (parseInt(num_can_plant) || 0) : null,
+            id_rep && id_rep.trim() ? id_rep.trim() : null,
+            tiem_entrega && tiem_entrega.trim() ? tiem_entrega.trim() : 'N/A',
+            parseFloat(tot_pedido) || 0
+        ]);
         
         res.json({ exito: true, mensaje: 'Pedido registrado con éxito', ticket: { id_ped } });
     } catch (err) {
@@ -1276,45 +1224,46 @@ app.post('/api/pedidos', async (req, res) => {
 // Pedidos (Historial Completo para los Tickets)
 app.get('/api/pedidos', async (req, res) => {
     try {
-        const result = await (new sql.Request()).query(`
+        const result = await pool.query(`
             SELECT 
-                pd.ID_PED, pd.TIP_PED, pd.TIP_ENV, 
-                ISNULL(pd.DIR_ENVIO, 'N/A') AS DIR_ENVIO,
-                c.NOM_CLI,
-                ISNULL(p.DESC_PRO, 'N/A') AS DESC_PRO,
-                ISNULL(pl.NOM_COM, ISNULL(pl.NOM_CTFO, 'N/A')) AS NOM_PLANTA,
-                ISNULL(pd.NUM_CAN, 0) AS NUM_CAN,
-                ISNULL(pd.NUM_CAN_PLANT, 0) AS NUM_CAN_PLANT,
-                ISNULL(e.NOM_EMP, 'Sin Asignar') AS REPARTIDOR,
-                pd.TIEM_ENTREGA,
-                CAST(ISNULL(pd.TOT_PEDIDO, 0) AS FLOAT) AS TOT_PEDIDO
-            FROM dbo.PEDIDOS pd
-            LEFT JOIN dbo.CLIENTES c ON pd.ID_CLI = c.ID_CLI
-            LEFT JOIN dbo.PRODUCTOS p ON pd.ID_PRO = p.ID_PRO
-            LEFT JOIN dbo.PLANTAS pl ON pd.ID_PLANTA = pl.ID_PLANTA
-            LEFT JOIN dbo.EMPLEADOS e ON pd.ID_REP = e.ID_EMP
+                pd.ID_PED AS "ID_PED", 
+                pd.TIP_PED AS "TIP_PED", 
+                pd.TIP_ENV AS "TIP_ENV", 
+                COALESCE(pd.DIR_ENVIO, 'N/A') AS "DIR_ENVIO",
+                c.NOM_CLI AS "NOM_CLI",
+                COALESCE(p.DESC_PRO, 'N/A') AS "DESC_PRO",
+                COALESCE(pl.NOM_COM, COALESCE(pl.NOM_CTFO, 'N/A')) AS "NOM_PLANTA",
+                COALESCE(pd.NUM_CAN, 0) AS "NUM_CAN",
+                COALESCE(pd.NUM_CAN_PLANT, 0) AS "NUM_CAN_PLANT",
+                COALESCE(e.NOM_EMP, 'Sin Asignar') AS "REPARTIDOR",
+                pd.TIEM_ENTREGA AS "TIEM_ENTREGA",
+                CAST(COALESCE(pd.TOT_PEDIDO, 0) AS FLOAT) AS "TOT_PEDIDO"
+            FROM PEDIDOS pd
+            LEFT JOIN CLIENTES c ON pd.ID_CLI = c.ID_CLI
+            LEFT JOIN PRODUCTOS p ON pd.ID_PRO = p.ID_PRO
+            LEFT JOIN PLANTAS pl ON pd.ID_PLANTA = pl.ID_PLANTA
+            LEFT JOIN EMPLEADOS e ON pd.ID_REP = e.ID_EMP
             ORDER BY pd.ID_PED DESC
         `);
-        res.json(result.recordset);
+        res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: 'Error al obtener el historial de pedidos.' });
     }
 });
 
 // Mecanismo de Idempotencia para Registro de Ventas (CU-31 / CU-12)
-// Evita ventas duplicadas por doble clic o reenvíos accidentales
 const ventasRecientes = new Map();
 
 function limpiarVentasRecientes() {
     const ahora = Date.now();
     for (const [clave, item] of ventasRecientes.entries()) {
-        if (ahora - item.timestamp > 15000) { // Limpieza automática tras 15 segundos
+        if (ahora - item.timestamp > 15000) {
             ventasRecientes.delete(clave);
         }
     }
 }
 
-// Ventas (Registrar) (CU-30 / CU-31 / RN-16 / RN-29 / CU-12: El saldo pendiente no puede exceder el total; mecanismo de idempotencia y prevención de duplicados por doble clic; consultas parametrizadas)
+// Ventas (Registrar) (CU-30 / CU-31 / RN-16 / RN-29 / CU-12)
 app.post('/api/ventas', async (req, res) => {
     let claveVenta;
     try {
@@ -1340,7 +1289,6 @@ app.post('/api/ventas', async (req, res) => {
             });
         }
 
-        // Validación RN-29: El saldo pendiente nunca puede ser mayor que el total (SALDO = TOTAL - PAGADO)
         if (numSaldo > numTotal) {
             return res.status(400).json({ 
                 exito: false, 
@@ -1348,8 +1296,6 @@ app.post('/api/ventas', async (req, res) => {
             });
         }
 
-        // Mecanismo de Idempotencia (CU-31 / CU-12):
-        // Detecta reintentos inmediatos o doble clic antes de completar la primera venta
         const idempotencyKey = req.headers['idempotency-key'] || req.body?.idempotency_key;
         claveVenta = idempotencyKey 
             ? String(idempotencyKey).trim() 
@@ -1368,28 +1314,26 @@ app.post('/api/ventas', async (req, res) => {
         }
 
         const ejecutarRegistroVenta = async () => {
-            const request = new sql.Request();
-            const lastVen = await request.query(`SELECT TOP 1 ID_VEN FROM dbo.VENTAS ORDER BY LEN(ID_VEN) DESC, ID_VEN DESC`);
+            const lastVen = await pool.query(`SELECT ID_VEN AS "ID_VEN" FROM VENTAS ORDER BY LENGTH(ID_VEN) DESC, ID_VEN DESC LIMIT 1`);
             let nextId = 1;
-            if (lastVen.recordset.length > 0 && lastVen.recordset[0].ID_VEN) {
-                const lastIdStr = lastVen.recordset[0].ID_VEN.replace('VEN-', '');
+            if (lastVen.rows.length > 0 && lastVen.rows[0].ID_VEN) {
+                const lastIdStr = lastVen.rows[0].ID_VEN.replace('VEN-', '');
                 nextId = parseInt(lastIdStr) + 1;
             }
             const id_venta = 'VEN-' + String(nextId).padStart(3, '0');
 
-            const insertReq = new sql.Request();
-            insertReq.input('id_venta', sql.VarChar, id_venta);
-            insertReq.input('id_cliente', sql.VarChar, id_cliente.trim());
-            insertReq.input('id_producto', sql.VarChar, id_producto && id_producto.trim() ? id_producto.trim() : null);
-            insertReq.input('id_planta', sql.VarChar, id_planta && id_planta.trim() ? id_planta.trim() : null);
-            insertReq.input('forma_pago', sql.NVarChar, forma_pago ? forma_pago.trim() : 'Efectivo');
-            insertReq.input('total', sql.Float, numTotal);
-            insertReq.input('saldo', sql.Float, numSaldo);
-
-            await insertReq.query(`
-                INSERT INTO dbo.VENTAS (ID_VEN, ID_CLI, ID_PRO, ID_PLANTA, FECHA_COMP, FORM_PAGO, TOT_PAGO, SALDO_PAGO)
-                VALUES (@id_venta, @id_cliente, @id_producto, @id_planta, GETDATE(), @forma_pago, @total, @saldo)
-            `);
+            await pool.query(`
+                INSERT INTO VENTAS (ID_VEN, ID_CLI, ID_PRO, ID_PLANTA, FECHA_COMP, FORM_PAGO, TOT_PAGO, SALDO_PAGO)
+                VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7)
+            `, [
+                id_venta,
+                id_cliente.trim(),
+                id_producto && id_producto.trim() ? id_producto.trim() : null,
+                id_planta && id_planta.trim() ? id_planta.trim() : null,
+                forma_pago ? forma_pago.trim() : 'Efectivo',
+                numTotal,
+                numSaldo
+            ]);
             
             return { 
                 exito: true, 
@@ -1425,26 +1369,26 @@ app.post('/api/ventas', async (req, res) => {
 // Ventas (Historial)
 app.get('/api/ventas', async (req, res) => {
     try {
-        const result = await (new sql.Request()).query(`
+        const result = await pool.query(`
             SELECT 
-                v.ID_VEN, 
-                v.ID_CLI, 
-                ISNULL(c.NOM_CLI, 'Cliente General') AS NOM_CLI,
-                ISNULL(v.ID_PRO, 'N/A') AS ID_PRO, 
-                ISNULL(p.DESC_PRO, 'N/A') AS DESC_PRO,
-                ISNULL(v.ID_PLANTA, 'N/A') AS ID_PLANTA, 
-                ISNULL(pl.NOM_COM, ISNULL(pl.NOM_CTFO, 'N/A')) AS NOM_PLANTA,
-                v.FECHA_COMP, 
-                v.FORM_PAGO, 
-                CAST(ISNULL(v.TOT_PAGO, 0) AS FLOAT) AS TOT_PAGO, 
-                CAST(ISNULL(v.SALDO_PAGO, 0) AS FLOAT) AS SALDO_PAGO
-            FROM dbo.VENTAS v
-            LEFT JOIN dbo.CLIENTES c ON v.ID_CLI = c.ID_CLI
-            LEFT JOIN dbo.PRODUCTOS p ON v.ID_PRO = p.ID_PRO
-            LEFT JOIN dbo.PLANTAS pl ON v.ID_PLANTA = pl.ID_PLANTA
+                v.ID_VEN AS "ID_VEN", 
+                v.ID_CLI AS "ID_CLI", 
+                COALESCE(c.NOM_CLI, 'Cliente General') AS "NOM_CLI",
+                COALESCE(v.ID_PRO, 'N/A') AS "ID_PRO", 
+                COALESCE(p.DESC_PRO, 'N/A') AS "DESC_PRO",
+                COALESCE(v.ID_PLANTA, 'N/A') AS "ID_PLANTA", 
+                COALESCE(pl.NOM_COM, COALESCE(pl.NOM_CTFO, 'N/A')) AS "NOM_PLANTA",
+                v.FECHA_COMP AS "FECHA_COMP", 
+                v.FORM_PAGO AS "FORM_PAGO", 
+                CAST(COALESCE(v.TOT_PAGO, 0) AS FLOAT) AS "TOT_PAGO", 
+                CAST(COALESCE(v.SALDO_PAGO, 0) AS FLOAT) AS "SALDO_PAGO"
+            FROM VENTAS v
+            LEFT JOIN CLIENTES c ON v.ID_CLI = c.ID_CLI
+            LEFT JOIN PRODUCTOS p ON v.ID_PRO = p.ID_PRO
+            LEFT JOIN PLANTAS pl ON v.ID_PLANTA = pl.ID_PLANTA
             ORDER BY v.FECHA_COMP DESC
         `);
-        res.json(result.recordset);
+        res.json(result.rows);
     } catch (err) {
         console.error('--- ERROR AL OBTENER VENTAS:', err.message);
         res.status(500).json({ error: 'Error al obtener el historial de ventas: ' + err.message });
@@ -1454,120 +1398,120 @@ app.get('/api/ventas', async (req, res) => {
 // APIs para el Dashboard General
 app.get('/api/dashboard/proveedores', async (req, res) => {
     try {
-        const result = await (new sql.Request()).query(`
+        const result = await pool.query(`
             SELECT 
-                ID_PROV, 
-                ISNULL(TIP_SUM, '') AS TIP_SUM, 
-                NOM_PROV, 
-                ISNULL(RFC_PROV, '') AS RFC_PROV, 
-                ISNULL(DIR_PROV, '') AS DIR_PROV, 
-                ISNULL(CON_PROV, '') AS CON_PROV, 
-                ISNULL(PRO_PROV, '') AS PRO_PROV 
-            FROM dbo.PROVEEDORES
+                ID_PROV AS "ID_PROV", 
+                COALESCE(TIP_SUM, '') AS "TIP_SUM", 
+                NOM_PROV AS "NOM_PROV", 
+                COALESCE(RFC_PROV, '') AS "RFC_PROV", 
+                COALESCE(DIR_PROV, '') AS "DIR_PROV", 
+                COALESCE(CON_PROV, '') AS "CON_PROV", 
+                COALESCE(PRO_PROV, '') AS "PRO_PROV" 
+            FROM PROVEEDORES
         `);
-        res.json(result.recordset);
+        res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
 });
 
 app.get('/api/dashboard/clientes', async (req, res) => {
     try {
-        const result = await (new sql.Request()).query(`
+        const result = await pool.query(`
             SELECT 
-                ID_CLI, 
-                NOM_CLI, 
-                ISNULL(DIR_CLI, '') AS DIR_CLI, 
-                ISNULL(TEL_CLI, '') AS TEL_CLI, 
-                ISNULL(COR_CLI, '') AS COR_CLI, 
-                ISNULL(COM_CLI, '') AS COM_CLI, 
-                ISNULL(PREF_CLI, '') AS PREF_CLI 
-            FROM dbo.CLIENTES
+                ID_CLI AS "ID_CLI", 
+                NOM_CLI AS "NOM_CLI", 
+                COALESCE(DIR_CLI, '') AS "DIR_CLI", 
+                COALESCE(TEL_CLI, '') AS "TEL_CLI", 
+                COALESCE(COR_CLI, '') AS "COR_CLI", 
+                COALESCE(COM_CLI, '') AS "COM_CLI", 
+                COALESCE(PREF_CLI, '') AS "PREF_CLI" 
+            FROM CLIENTES
         `);
-        res.json(result.recordset);
+        res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
 });
 
 app.get('/api/dashboard/empleados', async (req, res) => {
     try {
-        const result = await (new sql.Request()).query(`
+        const result = await pool.query(`
             SELECT 
-                ID_EMP, 
-                ISNULL(TIP_EMP, '') AS TIP_EMP, 
-                ISNULL(CURP_EMP, '') AS CURP_EMP, 
-                NOM_EMP, 
-                ISNULL(DIR_EMP, '') AS DIR_EMP, 
-                ISNULL(PUE_EMP, '') AS PUE_EMP, 
-                ISNULL(HOR_EMP, '') AS HOR_EMP, 
-                CAST(ISNULL(SUE_EMP, 0) AS FLOAT) AS SUE_EMP 
-            FROM dbo.EMPLEADOS
+                ID_EMP AS "ID_EMP", 
+                COALESCE(TIP_EMP, '') AS "TIP_EMP", 
+                COALESCE(CURP_EMP, '') AS "CURP_EMP", 
+                NOM_EMP AS "NOM_EMP", 
+                COALESCE(DIR_EMP, '') AS "DIR_EMP", 
+                COALESCE(PUE_EMP, '') AS "PUE_EMP", 
+                COALESCE(HOR_EMP, '') AS "HOR_EMP", 
+                CAST(COALESCE(SUE_EMP, 0) AS FLOAT) AS "SUE_EMP" 
+            FROM EMPLEADOS
         `);
-        res.json(result.recordset);
+        res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
 });
 
 app.get('/api/dashboard/productos', async (req, res) => {
     try {
-        const result = await (new sql.Request()).query(`
+        const result = await pool.query(`
             SELECT 
-                ID_PRO, 
-                ISNULL(TIP_PRO, '') AS TIP_PRO, 
-                DESC_PRO, 
-                STOCK_PRO, 
-                CAST(ISNULL(PREC_PRO, 0) AS FLOAT) AS PREC_PRO, 
-                ISNULL(ID_PROV, '') AS ID_PROV 
-            FROM dbo.PRODUCTOS
+                ID_PRO AS "ID_PRO", 
+                COALESCE(TIP_PRO, '') AS "TIP_PRO", 
+                DESC_PRO AS "DESC_PRO", 
+                STOCK_PRO AS "STOCK_PRO", 
+                CAST(COALESCE(PREC_PRO, 0) AS FLOAT) AS "PREC_PRO", 
+                COALESCE(ID_PROV, '') AS "ID_PROV" 
+            FROM PRODUCTOS
         `);
-        res.json(result.recordset);
+        res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
 });
 
 app.get('/api/dashboard/pedidos', async (req, res) => {
     try {
-        const result = await (new sql.Request()).query('SELECT ID_PED, TIP_PED, ID_CLI, CAST(ISNULL(TOT_PEDIDO, 0) AS FLOAT) AS TOT_PEDIDO FROM dbo.PEDIDOS');
-        res.json(result.recordset);
+        const result = await pool.query('SELECT ID_PED AS "ID_PED", TIP_PED AS "TIP_PED", ID_CLI AS "ID_CLI", CAST(COALESCE(TOT_PEDIDO, 0) AS FLOAT) AS "TOT_PEDIDO" FROM PEDIDOS');
+        res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
 });
 
 app.get('/api/dashboard/servicios', async (req, res) => {
     try {
-        const result = await (new sql.Request()).query('SELECT ID_SERV, ID_CLI, TRAB_REAL, CAST(ISNULL(COSTO_SERV, 0) AS FLOAT) AS COSTO_SERV FROM dbo.SERVICIOS');
-        res.json(result.recordset);
+        const result = await pool.query('SELECT ID_SERV AS "ID_SERV", ID_CLI AS "ID_CLI", TRAB_REAL AS "TRAB_REAL", CAST(COALESCE(COSTO_SERV, 0) AS FLOAT) AS "COSTO_SERV" FROM SERVICIOS');
+        res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
 });
 
 app.get('/api/dashboard/catalogo-servicios', async (req, res) => {
     try {
-        const result = await (new sql.Request()).query('SELECT ID_CAT_SERV, NOM_SERV, CAST(ISNULL(COSTO_EST, 0) AS FLOAT) AS COSTO_EST FROM dbo.CAT_SERVICIOS');
-        res.json(result.recordset);
+        const result = await pool.query('SELECT ID_CAT_SERV AS "ID_CAT_SERV", NOM_SERV AS "NOM_SERV", CAST(COALESCE(COSTO_EST, 0) AS FLOAT) AS "COSTO_EST" FROM CAT_SERVICIOS');
+        res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
 });
 
 app.get('/api/dashboard/ventas', async (req, res) => {
     try {
-        const result = await (new sql.Request()).query('SELECT ID_VEN, ID_CLI, FORM_PAGO, CAST(ISNULL(TOT_PAGO, 0) AS FLOAT) AS TOT_PAGO FROM dbo.VENTAS');
-        res.json(result.recordset);
+        const result = await pool.query('SELECT ID_VEN AS "ID_VEN", ID_CLI AS "ID_CLI", FORM_PAGO AS "FORM_PAGO", CAST(COALESCE(TOT_PAGO, 0) AS FLOAT) AS "TOT_PAGO" FROM VENTAS');
+        res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
 });
 
 // Obtener lista de usuarios para administración
 app.get('/api/usuarios', async (req, res) => {
     try {
-        const result = await (new sql.Request()).query(`
+        const result = await pool.query(`
             SELECT 
-                ISNULL(ID_USUARIO, USERNAME) AS ID_USUARIO, 
-                USERNAME, 
-                ROL, 
-                ID_EMP, 
-                ISNULL(ESTADO, 'Activo') AS ESTADO 
-            FROM dbo.USUARIOS
+                COALESCE(ID_USUARIO, USERNAME) AS "ID_USUARIO", 
+                USERNAME AS "USERNAME", 
+                ROL AS "ROL", 
+                ID_EMP AS "ID_EMP", 
+                COALESCE(ESTADO, 'Activo') AS "ESTADO" 
+            FROM USUARIOS
         `);
-        res.json(result.recordset);
+        res.json(result.rows);
     } catch (err) {
         console.error('--- ERROR EN GET /api/usuarios:', err.message);
         res.status(500).json({ error: 'Error al obtener usuarios: ' + err.message });
     }
 });
 
-// Registrar Usuario del Sistema (CU-18 / CU-26 / CU-27 / RN-19 / RN-22 / RN-34 / RN-35: Solo Administrador; USERNAME VARCHAR(80) hasta 80 caracteres; Empleado Asociado opcional/NULL)
+// Registrar Usuario del Sistema (CU-18 / CU-26 / CU-27 / RN-19 / RN-22 / RN-34 / RN-35)
 app.post('/api/usuarios', async (req, res) => {
     try {
         const tienePermiso = await verificarAccesoAdmin(req, res);
@@ -1581,7 +1525,6 @@ app.post('/api/usuarios', async (req, res) => {
 
         const usernameLimpio = username.trim();
 
-        // Longitud máxima de 80 caracteres (RN-19: USERNAME VARCHAR(80))
         if (usernameLimpio.length > 80) {
             return res.status(400).json({
                 exito: false,
@@ -1597,46 +1540,35 @@ app.post('/api/usuarios', async (req, res) => {
             return res.status(400).json({ exito: false, error: 'El rol del usuario es obligatorio.' });
         }
 
-        const checkReq = new sql.Request();
-        checkReq.input('username_check', sql.VarChar(80), usernameLimpio);
-        const check = await checkReq.query(`SELECT COUNT(*) as total FROM dbo.USUARIOS WHERE LTRIM(RTRIM(LOWER(USERNAME))) = LTRIM(RTRIM(LOWER(@username_check)))`);
-        if (check.recordset[0].total > 0) {
+        const check = await pool.query(`SELECT COUNT(*) AS "total" FROM USUARIOS WHERE TRIM(LOWER(USERNAME)) = TRIM(LOWER($1))`, [usernameLimpio]);
+        if (parseInt(check.rows[0].total) > 0) {
             return res.status(400).json({
                 exito: false,
                 error: `Error UNIQUE: El usuario "${usernameLimpio}" ya existe. Según la regla RN-13 (CP-13) el USERNAME debe ser único.`
             });
         }
 
-        // El campo Empleado Asociado es opcional y permite NULL (CU-10 / CU-26 / CU-27 / RN-22)
         const idEmpFinal = id_emp && typeof id_emp === 'string' && id_emp.trim() ? id_emp.trim() : null;
 
         if (idEmpFinal) {
-            const empCheckReq = new sql.Request();
-            empCheckReq.input('id_emp_check', sql.VarChar, idEmpFinal);
-            const empCheck = await empCheckReq.query('SELECT COUNT(*) as total FROM dbo.EMPLEADOS WHERE ID_EMP = @id_emp_check');
-            if (empCheck.recordset[0].total === 0) {
+            const empCheck = await pool.query('SELECT COUNT(*) AS "total" FROM EMPLEADOS WHERE ID_EMP = $1', [idEmpFinal]);
+            if (parseInt(empCheck.rows[0].total) === 0) {
                 return res.status(400).json({ exito: false, error: 'El empleado seleccionado no existe en el sistema.' });
             }
         }
 
-        const countResult = await (new sql.Request()).query('SELECT COUNT(*) as total FROM dbo.USUARIOS');
-        const id_usuario = 'USR-' + String(countResult.recordset[0].total + 1).padStart(3, '0');
+        const countResult = await pool.query('SELECT COUNT(*) AS "total" FROM USUARIOS');
+        const id_usuario = 'USR-' + String(parseInt(countResult.rows[0].total) + 1).padStart(3, '0');
 
-        const insertReq = new sql.Request();
-        insertReq.input('id_usuario', sql.VarChar, id_usuario);
-        insertReq.input('username', sql.VarChar(80), usernameLimpio);
-        insertReq.input('password', sql.NVarChar, password);
-        insertReq.input('rol', sql.NVarChar, rol.trim());
-        insertReq.input('id_emp', sql.VarChar, idEmpFinal);
+        await pool.query(`
+            INSERT INTO USUARIOS (ID_USUARIO, USERNAME, PASSWORD, ROL, ID_EMP, ESTADO)
+            VALUES ($1, $2, $3, $4, $5, 'Activo')
+        `, [id_usuario, usernameLimpio, password, rol.trim(), idEmpFinal]);
 
-        await insertReq.query(`
-            INSERT INTO dbo.USUARIOS (ID_USUARIO, USERNAME, PASSWORD, ROL, ID_EMP, ESTADO)
-            VALUES (@id_usuario, @username, @password, @rol, @id_emp, 'Activo')
-        `);
         res.json({ exito: true, mensaje: `Usuario "${usernameLimpio}" registrado con éxito (ID: ${id_usuario})` });
     } catch (err) {
         console.error('--- ERROR SQL EN USUARIOS:', err.message);
-        if (err.number === 2627 || err.number === 2601 || (err.message && err.message.toUpperCase().includes('UNIQUE'))) {
+        if (err.code === '23505' || (err.message && err.message.toUpperCase().includes('UNIQUE'))) {
             return res.status(400).json({
                 exito: false,
                 error: `Error UNIQUE: Violación de restricción UNIQUE. El nombre de usuario "${usernameLimpio}" ya existe en el sistema (RN-13 / CP-13).`
@@ -1646,7 +1578,7 @@ app.post('/api/usuarios', async (req, res) => {
     }
 });
 
-// Actualizar Estado de Usuario (Activo / Inactivo) (CU-18 / RN-34 / RN-35: Solo Administrador)
+// Actualizar Estado de Usuario (Activo / Inactivo) (CU-18 / RN-34 / RN-35)
 app.put('/api/usuarios/:id/estado', async (req, res) => {
     try {
         const tienePermiso = await verificarAccesoAdmin(req, res);
@@ -1654,13 +1586,12 @@ app.put('/api/usuarios/:id/estado', async (req, res) => {
 
         const idUsuario = req.params.id;
         const { estado } = req.body;
-        const request = new sql.Request();
 
-        await request.query(`
-            UPDATE dbo.USUARIOS 
-            SET ESTADO = '${estado}' 
-            WHERE ID_USUARIO = '${idUsuario}' OR USERNAME = '${idUsuario}'
-        `);
+        await pool.query(`
+            UPDATE USUARIOS 
+            SET ESTADO = $1 
+            WHERE ID_USUARIO = $2 OR USERNAME = $2
+        `, [estado, idUsuario]);
 
         res.json({ exito: true, mensaje: `Estado del usuario actualizado a ${estado}` });
     } catch (err) {
@@ -1673,20 +1604,18 @@ app.put('/api/usuarios/:id/estado', async (req, res) => {
 app.get('/api/usuarios/:id', async (req, res) => {
     try {
         const idUsuario = req.params.id;
-        const request = new sql.Request();
-        request.input('id_usuario', sql.VarChar, idUsuario);
-        const result = await request.query(`
+        const result = await pool.query(`
             SELECT 
-                ISNULL(ID_USUARIO, USERNAME) AS ID_USUARIO, 
-                USERNAME, 
-                ROL, 
-                ID_EMP, 
-                ISNULL(ESTADO, 'Activo') AS ESTADO 
-            FROM dbo.USUARIOS 
-            WHERE ID_USUARIO = @id_usuario OR USERNAME = @id_usuario
-        `);
-        if (result.recordset.length > 0) {
-            res.json(result.recordset[0]);
+                COALESCE(ID_USUARIO, USERNAME) AS "ID_USUARIO", 
+                USERNAME AS "USERNAME", 
+                ROL AS "ROL", 
+                ID_EMP AS "ID_EMP", 
+                COALESCE(ESTADO, 'Activo') AS "ESTADO" 
+            FROM USUARIOS 
+            WHERE ID_USUARIO = $1 OR USERNAME = $1
+        `, [idUsuario]);
+        if (result.rows.length > 0) {
+            res.json(result.rows[0]);
         } else {
             res.status(404).json({ exito: false, error: 'Usuario no encontrado' });
         }
@@ -1710,7 +1639,6 @@ app.put('/api/usuarios/:id', async (req, res) => {
         const idEmpVal = id_emp !== undefined ? id_emp : req.body?.ID_EMP;
         const estadoVal = estado !== undefined ? estado : req.body?.ESTADO;
 
-        // Validación de USERNAME si se desea cambiar (RN-13 / RN-19 / CP-13 / CU-51)
         let usernameLimpio = null;
         if (usernameVal !== undefined) {
             if (!usernameVal || typeof usernameVal !== 'string' || !usernameVal.trim()) {
@@ -1718,7 +1646,6 @@ app.put('/api/usuarios/:id', async (req, res) => {
             }
             usernameLimpio = usernameVal.trim();
 
-            // Longitud máxima de 80 caracteres (RN-19: USERNAME VARCHAR(80))
             if (usernameLimpio.length > 80) {
                 return res.status(400).json({
                     exito: false,
@@ -1726,18 +1653,14 @@ app.put('/api/usuarios/:id', async (req, res) => {
                 });
             }
 
-            // Validación de unicidad de USERNAME según RN-13 y caso de prueba CP-13
-            const checkReq = new sql.Request();
-            checkReq.input('username_check', sql.VarChar(80), usernameLimpio);
-            checkReq.input('id_usuario_check', sql.VarChar, idUsuario);
-            const check = await checkReq.query(`
-                SELECT COUNT(*) as total 
-                FROM dbo.USUARIOS 
-                WHERE LTRIM(RTRIM(LOWER(USERNAME))) = LTRIM(RTRIM(LOWER(@username_check))) 
-                  AND ID_USUARIO != @id_usuario_check 
-                  AND USERNAME != @id_usuario_check
-            `);
-            if (check.recordset[0].total > 0) {
+            const check = await pool.query(`
+                SELECT COUNT(*) AS "total" 
+                FROM USUARIOS 
+                WHERE TRIM(LOWER(USERNAME)) = TRIM(LOWER($1)) 
+                  AND ID_USUARIO != $2 
+                  AND USERNAME != $2
+            `, [usernameLimpio, idUsuario]);
+            if (parseInt(check.rows[0].total) > 0) {
                 return res.status(400).json({
                     exito: false,
                     error: `Error UNIQUE: El nombre de usuario "${usernameLimpio}" ya existe en el sistema. Según la regla RN-13 (CP-13) el USERNAME debe ser único.`
@@ -1746,52 +1669,52 @@ app.put('/api/usuarios/:id', async (req, res) => {
         }
 
         if (idEmpVal !== undefined && idEmpVal && typeof idEmpVal === 'string' && idEmpVal.trim()) {
-            const empCheckReq = new sql.Request();
-            empCheckReq.input('id_emp_check', sql.VarChar, idEmpVal.trim());
-            const empCheck = await empCheckReq.query('SELECT COUNT(*) as total FROM dbo.EMPLEADOS WHERE ID_EMP = @id_emp_check');
-            if (empCheck.recordset[0].total === 0) {
+            const empCheck = await pool.query('SELECT COUNT(*) AS "total" FROM EMPLEADOS WHERE ID_EMP = $1', [idEmpVal.trim()]);
+            if (parseInt(empCheck.rows[0].total) === 0) {
                 return res.status(400).json({ exito: false, error: 'El empleado seleccionado no existe en el sistema.' });
             }
         }
 
-        const request = new sql.Request();
-        request.input('id_usuario', sql.VarChar, idUsuario);
         let updates = [];
+        let values = [];
+        let paramIdx = 1;
 
         if (usernameLimpio !== null) {
-            request.input('username', sql.VarChar(80), usernameLimpio);
-            updates.push('USERNAME = @username');
+            updates.push(`USERNAME = $${paramIdx++}`);
+            values.push(usernameLimpio);
         }
         if (passwordVal !== undefined && passwordVal && typeof passwordVal === 'string' && passwordVal.trim()) {
-            request.input('password', sql.NVarChar, passwordVal.trim());
-            updates.push('PASSWORD = @password');
+            updates.push(`PASSWORD = $${paramIdx++}`);
+            values.push(passwordVal.trim());
         }
         if (rolVal !== undefined && rolVal && typeof rolVal === 'string' && rolVal.trim()) {
-            request.input('rol', sql.NVarChar, rolVal.trim());
-            updates.push('ROL = @rol');
+            updates.push(`ROL = $${paramIdx++}`);
+            values.push(rolVal.trim());
         }
         if (idEmpVal !== undefined) {
             const finalEmp = idEmpVal && typeof idEmpVal === 'string' && idEmpVal.trim() ? idEmpVal.trim() : null;
-            request.input('id_emp', sql.VarChar, finalEmp);
-            updates.push('ID_EMP = @id_emp');
+            updates.push(`ID_EMP = $${paramIdx++}`);
+            values.push(finalEmp);
         }
         if (estadoVal !== undefined && estadoVal && typeof estadoVal === 'string' && estadoVal.trim()) {
-            request.input('estado', sql.NVarChar, estadoVal.trim());
-            updates.push('ESTADO = @estado');
+            updates.push(`ESTADO = $${paramIdx++}`);
+            values.push(estadoVal.trim());
         }
 
         if (updates.length === 0) return res.json({ exito: true, mensaje: 'Sin cambios para actualizar.' });
 
-        await request.query(`
-            UPDATE dbo.USUARIOS 
+        values.push(idUsuario);
+        const query = `
+            UPDATE USUARIOS 
             SET ${updates.join(', ')} 
-            WHERE ID_USUARIO = @id_usuario OR USERNAME = @id_usuario
-        `);
+            WHERE ID_USUARIO = $${paramIdx} OR USERNAME = $${paramIdx}
+        `;
+        await pool.query(query, values);
 
         res.json({ exito: true, mensaje: 'Usuario actualizado correctamente.' });
     } catch (err) {
         console.error('--- ERROR SQL AL ACTUALIZAR USUARIO:', err.message);
-        if (err.number === 2627 || err.number === 2601 || (err.message && err.message.toUpperCase().includes('UNIQUE'))) {
+        if (err.code === '23505' || (err.message && err.message.toUpperCase().includes('UNIQUE'))) {
             return res.status(400).json({
                 exito: false,
                 error: 'Error UNIQUE: Violación de restricción UNIQUE. El nombre de usuario ya se encuentra registrado (RN-13 / CP-13).'
@@ -1804,22 +1727,20 @@ app.put('/api/usuarios/:id', async (req, res) => {
 // Obtener Cliente por ID (CU-16 / CU-42 / CU-52)
 app.get('/api/clientes/:id', async (req, res) => {
     try {
-        const request = new sql.Request();
-        request.input('id_cli', sql.VarChar, req.params.id);
-        const result = await request.query(`
+        const result = await pool.query(`
             SELECT 
-                ID_CLI, 
-                NOM_CLI, 
-                ISNULL(DIR_CLI, '') AS DIR_CLI, 
-                ISNULL(TEL_CLI, '') AS TEL_CLI, 
-                ISNULL(COR_CLI, '') AS COR_CLI, 
-                ISNULL(COM_CLI, '') AS COM_CLI, 
-                ISNULL(PREF_CLI, '') AS PREF_CLI 
-            FROM dbo.CLIENTES 
-            WHERE ID_CLI = @id_cli
-        `);
-        if (result.recordset.length > 0) {
-            res.json(result.recordset[0]);
+                ID_CLI AS "ID_CLI", 
+                NOM_CLI AS "NOM_CLI", 
+                COALESCE(DIR_CLI, '') AS "DIR_CLI", 
+                COALESCE(TEL_CLI, '') AS "TEL_CLI", 
+                COALESCE(COR_CLI, '') AS "COR_CLI", 
+                COALESCE(COM_CLI, '') AS "COM_CLI", 
+                COALESCE(PREF_CLI, '') AS "PREF_CLI" 
+            FROM CLIENTES 
+            WHERE ID_CLI = $1
+        `, [req.params.id]);
+        if (result.rows.length > 0) {
+            res.json(result.rows[0]);
         } else {
             res.status(404).json({ exito: false, error: 'Cliente no encontrado' });
         }
@@ -1848,7 +1769,6 @@ app.put('/api/clientes/:id', async (req, res) => {
             return res.status(400).json({ exito: false, error: 'El nombre del cliente no puede estar vacío.' });
         }
 
-        // Validación de formato de correo y existencia de dominio tras '@' (CU-11 / CU-12 / CU-16 / CU-42 / CU-47 / RN-18)
         if (cor_cli_val !== undefined && cor_cli_val !== null && String(cor_cli_val).trim() !== '') {
             const correoLimpio = String(cor_cli_val).trim();
             const partesCorreo = correoLimpio.split('@');
@@ -1868,41 +1788,42 @@ app.put('/api/clientes/:id', async (req, res) => {
             }
         }
 
-        const request = new sql.Request();
-        request.input('id_cli', sql.VarChar, id_cli);
         let updates = [];
+        let values = [];
+        let paramIdx = 1;
 
         if (nom_cli_val !== undefined) {
-            request.input('nom_cli', sql.NVarChar, nom_cli_val.trim());
-            updates.push('NOM_CLI = @nom_cli');
+            updates.push(`NOM_CLI = $${paramIdx++}`);
+            values.push(nom_cli_val.trim());
         }
         if (dir_cli_val !== undefined) {
             const dirLimpio = dir_cli_val && String(dir_cli_val).trim() ? sanitizarSqlYHtml(dir_cli_val) : null;
-            request.input('dir_cli', sql.NVarChar, dirLimpio && dirLimpio.trim() ? dirLimpio.trim() : null);
-            updates.push('DIR_CLI = @dir_cli');
+            updates.push(`DIR_CLI = $${paramIdx++}`);
+            values.push(dirLimpio && dirLimpio.trim() ? dirLimpio.trim() : null);
         }
         if (tel_cli_val !== undefined) {
-            request.input('tel_cli', sql.VarChar, tel_cli_val && String(tel_cli_val).trim() ? String(tel_cli_val).trim() : null);
-            updates.push('TEL_CLI = @tel_cli');
+            updates.push(`TEL_CLI = $${paramIdx++}`);
+            values.push(tel_cli_val && String(tel_cli_val).trim() ? String(tel_cli_val).trim() : null);
         }
         if (cor_cli_val !== undefined) {
-            request.input('cor_cli', sql.VarChar, cor_cli_val && String(cor_cli_val).trim() ? String(cor_cli_val).trim() : null);
-            updates.push('COR_CLI = @cor_cli');
+            updates.push(`COR_CLI = $${paramIdx++}`);
+            values.push(cor_cli_val && String(cor_cli_val).trim() ? String(cor_cli_val).trim() : null);
         }
         if (com_cli_val !== undefined) {
             const comLimpio = com_cli_val && String(com_cli_val).trim() ? sanitizarSqlYHtml(com_cli_val) : null;
-            request.input('com_cli', sql.NVarChar, comLimpio && comLimpio.trim() ? comLimpio.trim() : null);
-            updates.push('COM_CLI = @com_cli');
+            updates.push(`COM_CLI = $${paramIdx++}`);
+            values.push(comLimpio && comLimpio.trim() ? comLimpio.trim() : null);
         }
         if (pref_cli_val !== undefined) {
             const prefLimpio = pref_cli_val && String(pref_cli_val).trim() ? sanitizarSqlYHtml(pref_cli_val) : null;
-            request.input('pref_cli', sql.NVarChar, prefLimpio && prefLimpio.trim() ? prefLimpio.trim() : null);
-            updates.push('PREF_CLI = @pref_cli');
+            updates.push(`PREF_CLI = $${paramIdx++}`);
+            values.push(prefLimpio && prefLimpio.trim() ? prefLimpio.trim() : null);
         }
 
         if (updates.length === 0) return res.json({ exito: true, mensaje: 'Sin cambios para actualizar.' });
 
-        await request.query(`UPDATE dbo.CLIENTES SET ${updates.join(', ')} WHERE ID_CLI = @id_cli`);
+        values.push(id_cli);
+        await pool.query(`UPDATE CLIENTES SET ${updates.join(', ')} WHERE ID_CLI = $${paramIdx}`, values);
         res.json({ exito: true, mensaje: 'Cliente actualizado correctamente.' });
     } catch (err) {
         console.error('Error al actualizar cliente:', err.message);
@@ -1913,11 +1834,20 @@ app.put('/api/clientes/:id', async (req, res) => {
 // Obtener Proveedor por ID (CU-16 / CU-45)
 app.get('/api/proveedores/:id', async (req, res) => {
     try {
-        const request = new sql.Request();
-        request.input('id_prov', sql.VarChar, req.params.id);
-        const result = await request.query('SELECT ID_PROV, TIP_SUM, NOM_PROV, RFC_PROV, DIR_PROV, ISNULL(CON_PROV, \'\') AS CON_PROV, PRO_PROV FROM dbo.PROVEEDORES WHERE ID_PROV = @id_prov');
-        if (result.recordset.length > 0) {
-            res.json(result.recordset[0]);
+        const result = await pool.query(`
+            SELECT 
+                ID_PROV AS "ID_PROV", 
+                TIP_SUM AS "TIP_SUM", 
+                NOM_PROV AS "NOM_PROV", 
+                RFC_PROV AS "RFC_PROV", 
+                DIR_PROV AS "DIR_PROV", 
+                COALESCE(CON_PROV, '') AS "CON_PROV", 
+                PRO_PROV AS "PRO_PROV" 
+            FROM PROVEEDORES 
+            WHERE ID_PROV = $1
+        `, [req.params.id]);
+        if (result.rows.length > 0) {
+            res.json(result.rows[0]);
         } else {
             res.status(404).json({ exito: false, error: 'Proveedor no encontrado' });
         }
@@ -1946,38 +1876,39 @@ app.put('/api/proveedores/:id', async (req, res) => {
             return res.status(400).json({ exito: false, error: 'El nombre del proveedor no puede estar vacío.' });
         }
 
-        const request = new sql.Request();
-        request.input('id_prov', sql.VarChar, id_prov);
         let updates = [];
+        let values = [];
+        let paramIdx = 1;
 
         if (nom_prov_val !== undefined) {
-            request.input('nom_prov', sql.NVarChar, nom_prov_val.trim());
-            updates.push('NOM_PROV = @nom_prov');
+            updates.push(`NOM_PROV = $${paramIdx++}`);
+            values.push(nom_prov_val.trim());
         }
         if (tip_sum_val !== undefined) {
-            request.input('tip_sum', sql.NVarChar, tip_sum_val && String(tip_sum_val).trim() ? String(tip_sum_val).trim() : null);
-            updates.push('TIP_SUM = @tip_sum');
+            updates.push(`TIP_SUM = $${paramIdx++}`);
+            values.push(tip_sum_val && String(tip_sum_val).trim() ? String(tip_sum_val).trim() : null);
         }
         if (rfc_prov_val !== undefined) {
-            request.input('rfc_prov', sql.VarChar, rfc_prov_val && String(rfc_prov_val).trim() ? String(rfc_prov_val).trim() : null);
-            updates.push('RFC_PROV = @rfc_prov');
+            updates.push(`RFC_PROV = $${paramIdx++}`);
+            values.push(rfc_prov_val && String(rfc_prov_val).trim() ? String(rfc_prov_val).trim() : null);
         }
         if (dir_prov_val !== undefined) {
-            request.input('dir_prov', sql.NVarChar, dir_prov_val && String(dir_prov_val).trim() ? String(dir_prov_val).trim() : null);
-            updates.push('DIR_PROV = @dir_prov');
+            updates.push(`DIR_PROV = $${paramIdx++}`);
+            values.push(dir_prov_val && String(dir_prov_val).trim() ? String(dir_prov_val).trim() : null);
         }
         if (con_prov_val !== undefined) {
-            request.input('con_prov', sql.VarChar, con_prov_val && String(con_prov_val).trim() ? String(con_prov_val).trim() : null);
-            updates.push('CON_PROV = @con_prov');
+            updates.push(`CON_PROV = $${paramIdx++}`);
+            values.push(con_prov_val && String(con_prov_val).trim() ? String(con_prov_val).trim() : null);
         }
         if (pro_prov_val !== undefined) {
-            request.input('pro_prov', sql.NVarChar, pro_prov_val && String(pro_prov_val).trim() ? String(pro_prov_val).trim() : null);
-            updates.push('PRO_PROV = @pro_prov');
+            updates.push(`PRO_PROV = $${paramIdx++}`);
+            values.push(pro_prov_val && String(pro_prov_val).trim() ? String(pro_prov_val).trim() : null);
         }
 
         if (updates.length === 0) return res.json({ exito: true, mensaje: 'Sin cambios para actualizar.' });
 
-        await request.query(`UPDATE dbo.PROVEEDORES SET ${updates.join(', ')} WHERE ID_PROV = @id_prov`);
+        values.push(id_prov);
+        await pool.query(`UPDATE PROVEEDORES SET ${updates.join(', ')} WHERE ID_PROV = $${paramIdx}`, values);
         res.json({ exito: true, mensaje: 'Proveedor actualizado correctamente.' });
     } catch (err) {
         console.error('Error al actualizar proveedor:', err.message);
@@ -1988,11 +1919,21 @@ app.put('/api/proveedores/:id', async (req, res) => {
 // Obtener Empleado por ID (CU-16 / CU-46)
 app.get('/api/empleados/:id', async (req, res) => {
     try {
-        const request = new sql.Request();
-        request.input('id_emp', sql.VarChar, req.params.id);
-        const result = await request.query('SELECT ID_EMP, TIP_EMP, CURP_EMP, NOM_EMP, DIR_EMP, PUE_EMP, HOR_EMP, CAST(ISNULL(SUE_EMP, 0) AS FLOAT) AS SUE_EMP FROM dbo.EMPLEADOS WHERE ID_EMP = @id_emp');
-        if (result.recordset.length > 0) {
-            res.json(result.recordset[0]);
+        const result = await pool.query(`
+            SELECT 
+                ID_EMP AS "ID_EMP", 
+                TIP_EMP AS "TIP_EMP", 
+                CURP_EMP AS "CURP_EMP", 
+                NOM_EMP AS "NOM_EMP", 
+                DIR_EMP AS "DIR_EMP", 
+                PUE_EMP AS "PUE_EMP", 
+                HOR_EMP AS "HOR_EMP", 
+                CAST(COALESCE(SUE_EMP, 0) AS FLOAT) AS "SUE_EMP" 
+            FROM EMPLEADOS 
+            WHERE ID_EMP = $1
+        `, [req.params.id]);
+        if (result.rows.length > 0) {
+            res.json(result.rows[0]);
         } else {
             res.status(404).json({ exito: false, error: 'Empleado no encontrado' });
         }
@@ -2022,45 +1963,46 @@ app.put('/api/empleados/:id', async (req, res) => {
             return res.status(400).json({ exito: false, error: 'El nombre del empleado no puede estar vacío.' });
         }
 
-        const request = new sql.Request();
-        request.input('id_emp', sql.VarChar, id_emp);
         let updates = [];
+        let values = [];
+        let paramIdx = 1;
 
         if (nom_emp_val !== undefined) {
-            request.input('nom_emp', sql.NVarChar, nom_emp_val.trim());
-            updates.push('NOM_EMP = @nom_emp');
+            updates.push(`NOM_EMP = $${paramIdx++}`);
+            values.push(nom_emp_val.trim());
         }
         if (tip_emp_val !== undefined) {
-            request.input('tip_emp', sql.VarChar, tip_emp_val && String(tip_emp_val).trim() ? String(tip_emp_val).trim() : null);
-            updates.push('TIP_EMP = @tip_emp');
+            updates.push(`TIP_EMP = $${paramIdx++}`);
+            values.push(tip_emp_val && String(tip_emp_val).trim() ? String(tip_emp_val).trim() : null);
         }
         if (curp_emp_val !== undefined) {
-            request.input('curp_emp', sql.VarChar, curp_emp_val && String(curp_emp_val).trim() ? String(curp_emp_val).trim() : null);
-            updates.push('CURP_EMP = @curp_emp');
+            updates.push(`CURP_EMP = $${paramIdx++}`);
+            values.push(curp_emp_val && String(curp_emp_val).trim() ? String(curp_emp_val).trim() : null);
         }
         if (dir_emp_val !== undefined) {
-            request.input('dir_emp', sql.NVarChar, dir_emp_val && String(dir_emp_val).trim() ? String(dir_emp_val).trim() : null);
-            updates.push('DIR_EMP = @dir_emp');
+            updates.push(`DIR_EMP = $${paramIdx++}`);
+            values.push(dir_emp_val && String(dir_emp_val).trim() ? String(dir_emp_val).trim() : null);
         }
         if (pue_emp_val !== undefined) {
-            request.input('pue_emp', sql.NVarChar, pue_emp_val && String(pue_emp_val).trim() ? String(pue_emp_val).trim() : null);
-            updates.push('PUE_EMP = @pue_emp');
+            updates.push(`PUE_EMP = $${paramIdx++}`);
+            values.push(pue_emp_val && String(pue_emp_val).trim() ? String(pue_emp_val).trim() : null);
         }
         if (hor_emp_val !== undefined) {
-            request.input('hor_emp', sql.NVarChar, hor_emp_val && String(hor_emp_val).trim() ? String(hor_emp_val).trim() : null);
-            updates.push('HOR_EMP = @hor_emp');
+            updates.push(`HOR_EMP = $${paramIdx++}`);
+            values.push(hor_emp_val && String(hor_emp_val).trim() ? String(hor_emp_val).trim() : null);
         }
         if (sue_emp_val !== undefined) {
             const numSueldo = typeof sue_emp_val === 'number' ? sue_emp_val : parseFloat(String(sue_emp_val).replace(/[^0-9.-]/g, ''));
             if (!isNaN(numSueldo) && numSueldo >= 0) {
-                request.input('sue_emp', sql.Float, numSueldo);
-                updates.push('SUE_EMP = @sue_emp');
+                updates.push(`SUE_EMP = $${paramIdx++}`);
+                values.push(numSueldo);
             }
         }
 
         if (updates.length === 0) return res.json({ exito: true, mensaje: 'Sin cambios para actualizar.' });
 
-        await request.query(`UPDATE dbo.EMPLEADOS SET ${updates.join(', ')} WHERE ID_EMP = @id_emp`);
+        values.push(id_emp);
+        await pool.query(`UPDATE EMPLEADOS SET ${updates.join(', ')} WHERE ID_EMP = $${paramIdx}`, values);
         res.json({ exito: true, mensaje: 'Empleado actualizado correctamente.' });
     } catch (err) {
         console.error('Error al actualizar empleado:', err.message);
@@ -2071,11 +2013,19 @@ app.put('/api/empleados/:id', async (req, res) => {
 // Obtener Producto por ID (CU-16 / CU-48)
 app.get('/api/productos/:id', async (req, res) => {
     try {
-        const request = new sql.Request();
-        request.input('id_pro', sql.VarChar, req.params.id);
-        const result = await request.query('SELECT ID_PRO, TIP_PRO, DESC_PRO, STOCK_PRO, CAST(ISNULL(PREC_PRO, 0) AS FLOAT) AS PREC_PRO, ID_PROV FROM dbo.PRODUCTOS WHERE ID_PRO = @id_pro');
-        if (result.recordset.length > 0) {
-            res.json(result.recordset[0]);
+        const result = await pool.query(`
+            SELECT 
+                ID_PRO AS "ID_PRO", 
+                TIP_PRO AS "TIP_PRO", 
+                DESC_PRO AS "DESC_PRO", 
+                STOCK_PRO AS "STOCK_PRO", 
+                CAST(COALESCE(PREC_PRO, 0) AS FLOAT) AS "PREC_PRO", 
+                ID_PROV AS "ID_PROV" 
+            FROM PRODUCTOS 
+            WHERE ID_PRO = $1
+        `, [req.params.id]);
+        if (result.rows.length > 0) {
+            res.json(result.rows[0]);
         } else {
             res.status(404).json({ exito: false, error: 'Producto no encontrado' });
         }
@@ -2103,7 +2053,6 @@ app.put('/api/productos/:id', async (req, res) => {
             return res.status(400).json({ exito: false, error: 'La descripción del producto no puede estar vacía.' });
         }
 
-        // Validación de precio no negativo (RN-16 / CU-48)
         if (prec_val !== undefined && prec_val !== null && String(prec_val).trim() !== '') {
             const numPrecio = typeof prec_val === 'number' ? prec_val : parseFloat(String(prec_val).trim());
             if (isNaN(numPrecio) || numPrecio < 0) {
@@ -2114,7 +2063,6 @@ app.put('/api/productos/:id', async (req, res) => {
             }
         }
 
-        // Validación de stock no negativo (RN-17)
         if (stock_val !== undefined && stock_val !== null && String(stock_val).trim() !== '') {
             const numStock = typeof stock_val === 'number' ? stock_val : Number(String(stock_val).trim());
             if (isNaN(numStock) || !Number.isInteger(numStock) || numStock < 0) {
@@ -2125,16 +2073,13 @@ app.put('/api/productos/:id', async (req, res) => {
             }
         }
 
-        // Validación de existencia de proveedor (RN-20 / CU-50)
         if (prov_val !== undefined && prov_val !== null && String(prov_val).trim() !== '') {
-            const checkProvReq = new sql.Request();
-            checkProvReq.input('id_prov_check', sql.VarChar, String(prov_val).trim());
-            const provCheck = await checkProvReq.query(`
-                SELECT COUNT(*) as total 
-                FROM dbo.PROVEEDORES 
-                WHERE ID_PROV = @id_prov_check OR LTRIM(RTRIM(LOWER(NOM_PROV))) = LTRIM(RTRIM(LOWER(@id_prov_check)))
-            `);
-            if (provCheck.recordset[0].total === 0) {
+            const provCheck = await pool.query(`
+                SELECT COUNT(*) AS "total" 
+                FROM PROVEEDORES 
+                WHERE ID_PROV = $1 OR TRIM(LOWER(NOM_PROV)) = TRIM(LOWER($1))
+            `, [String(prov_val).trim()]);
+            if (parseInt(provCheck.rows[0].total) === 0) {
                 return res.status(400).json({
                     exito: false,
                     error: 'El proveedor seleccionado no existe en el sistema (RN-20).'
@@ -2142,36 +2087,37 @@ app.put('/api/productos/:id', async (req, res) => {
             }
         }
 
-        const request = new sql.Request();
-        request.input('id_pro', sql.VarChar, id_pro);
         let updates = [];
+        let values = [];
+        let paramIdx = 1;
 
         if (desc_val !== undefined) {
-            request.input('desc_pro', sql.NVarChar, desc_val.trim());
-            updates.push('DESC_PRO = @desc_pro');
+            updates.push(`DESC_PRO = $${paramIdx++}`);
+            values.push(desc_val.trim());
         }
         if (tip_val !== undefined) {
-            request.input('tip_pro', sql.NVarChar, tip_val && String(tip_val).trim() ? String(tip_val).trim() : null);
-            updates.push('TIP_PRO = @tip_pro');
+            updates.push(`TIP_PRO = $${paramIdx++}`);
+            values.push(tip_val && String(tip_val).trim() ? String(tip_val).trim() : null);
         }
         if (prec_val !== undefined) {
             const numPrec = typeof prec_val === 'number' ? prec_val : parseFloat(String(prec_val).trim());
-            request.input('prec_pro', sql.Float, numPrec);
-            updates.push('PREC_PRO = @prec_pro');
+            updates.push(`PREC_PRO = $${paramIdx++}`);
+            values.push(numPrec);
         }
         if (stock_val !== undefined) {
             const numStk = typeof stock_val === 'number' ? stock_val : parseInt(String(stock_val).trim(), 10);
-            request.input('stock_pro', sql.Int, numStk);
-            updates.push('STOCK_PRO = @stock_pro');
+            updates.push(`STOCK_PRO = $${paramIdx++}`);
+            values.push(numStk);
         }
         if (prov_val !== undefined) {
-            request.input('id_prov', sql.VarChar, prov_val && String(prov_val).trim() ? String(prov_val).trim() : null);
-            updates.push('ID_PROV = @id_prov');
+            updates.push(`ID_PROV = $${paramIdx++}`);
+            values.push(prov_val && String(prov_val).trim() ? String(prov_val).trim() : null);
         }
 
         if (updates.length === 0) return res.json({ exito: true, mensaje: 'Sin cambios para actualizar.' });
 
-        await request.query(`UPDATE dbo.PRODUCTOS SET ${updates.join(', ')} WHERE ID_PRO = @id_pro`);
+        values.push(id_pro);
+        await pool.query(`UPDATE PRODUCTOS SET ${updates.join(', ')} WHERE ID_PRO = $${paramIdx}`, values);
         res.json({ exito: true, mensaje: 'Producto actualizado correctamente.' });
     } catch (err) {
         console.error('Error al actualizar producto:', err.message);
@@ -2182,11 +2128,21 @@ app.put('/api/productos/:id', async (req, res) => {
 // Obtener Planta por ID (CU-16 / CU-49)
 app.get('/api/plantas/:id', async (req, res) => {
     try {
-        const request = new sql.Request();
-        request.input('id_planta', sql.VarChar, req.params.id);
-        const result = await request.query('SELECT ID_PLANTA, TIP_PLANTA, NOM_CTFO, NOM_COM, TAM_PLANT, STOCK_PLANT, PROV_PLANT, CAST(ISNULL(PREC_PLANTA, 0) AS FLOAT) AS PREC_PLANTA FROM dbo.PLANTAS WHERE ID_PLANTA = @id_planta');
-        if (result.recordset.length > 0) {
-            res.json(result.recordset[0]);
+        const result = await pool.query(`
+            SELECT 
+                ID_PLANTA AS "ID_PLANTA", 
+                TIP_PLANTA AS "TIP_PLANTA", 
+                NOM_CTFO AS "NOM_CTFO", 
+                NOM_COM AS "NOM_COM", 
+                TAM_PLANT AS "TAM_PLANT", 
+                STOCK_PLANT AS "STOCK_PLANT", 
+                PROV_PLANT AS "PROV_PLANT", 
+                CAST(COALESCE(PREC_PLANTA, 0) AS FLOAT) AS "PREC_PLANTA" 
+            FROM PLANTAS 
+            WHERE ID_PLANTA = $1
+        `, [req.params.id]);
+        if (result.rows.length > 0) {
+            res.json(result.rows[0]);
         } else {
             res.status(404).json({ exito: false, error: 'Planta no encontrada' });
         }
@@ -2216,7 +2172,6 @@ app.put('/api/plantas/:id', async (req, res) => {
             return res.status(400).json({ exito: false, error: 'El nombre científico de la planta no puede estar vacío.' });
         }
 
-        // Validación de stock no negativo (RN-17 / CU-49)
         if (stock_val !== undefined && stock_val !== null && String(stock_val).trim() !== '') {
             const numStock = typeof stock_val === 'number' ? stock_val : Number(String(stock_val).trim());
             if (isNaN(numStock) || !Number.isInteger(numStock) || numStock < 0) {
@@ -2227,7 +2182,6 @@ app.put('/api/plantas/:id', async (req, res) => {
             }
         }
 
-        // Validación de precio no negativo (RN-16)
         if (prec_val !== undefined && prec_val !== null && String(prec_val).trim() !== '') {
             const numPrecio = typeof prec_val === 'number' ? prec_val : parseFloat(String(prec_val).trim());
             if (isNaN(numPrecio) || numPrecio < 0) {
@@ -2238,44 +2192,45 @@ app.put('/api/plantas/:id', async (req, res) => {
             }
         }
 
-        const request = new sql.Request();
-        request.input('id_planta', sql.VarChar, id_planta);
         let updates = [];
+        let values = [];
+        let paramIdx = 1;
 
         if (ctfo_val !== undefined) {
-            request.input('nom_ctfo', sql.NVarChar, ctfo_val.trim());
-            updates.push('NOM_CTFO = @nom_ctfo');
+            updates.push(`NOM_CTFO = $${paramIdx++}`);
+            values.push(ctfo_val.trim());
         }
         if (com_val !== undefined) {
-            request.input('nom_com', sql.NVarChar, com_val && String(com_val).trim() ? String(com_val).trim() : null);
-            updates.push('NOM_COM = @nom_com');
+            updates.push(`NOM_COM = $${paramIdx++}`);
+            values.push(com_val && String(com_val).trim() ? String(com_val).trim() : null);
         }
         if (tip_val !== undefined) {
-            request.input('tip_planta', sql.NVarChar, tip_val && String(tip_val).trim() ? String(tip_val).trim() : null);
-            updates.push('TIP_PLANTA = @tip_planta');
+            updates.push(`TIP_PLANTA = $${paramIdx++}`);
+            values.push(tip_val && String(tip_val).trim() ? String(tip_val).trim() : null);
         }
         if (tam_val !== undefined) {
-            request.input('tam_plant', sql.NVarChar, tam_val && String(tam_val).trim() ? String(tam_val).trim() : null);
-            updates.push('TAM_PLANT = @tam_plant');
+            updates.push(`TAM_PLANT = $${paramIdx++}`);
+            values.push(tam_val && String(tam_val).trim() ? String(tam_val).trim() : null);
         }
         if (stock_val !== undefined) {
             const numStk = typeof stock_val === 'number' ? stock_val : parseInt(String(stock_val).trim(), 10);
-            request.input('stock_plant', sql.Int, numStk);
-            updates.push('STOCK_PLANT = @stock_plant');
+            updates.push(`STOCK_PLANT = $${paramIdx++}`);
+            values.push(numStk);
         }
         if (prec_val !== undefined) {
             const numPrec = typeof prec_val === 'number' ? prec_val : parseFloat(String(prec_val).trim());
-            request.input('prec_planta', sql.Float, numPrec);
-            updates.push('PREC_PLANTA = @prec_planta');
+            updates.push(`PREC_PLANTA = $${paramIdx++}`);
+            values.push(numPrec);
         }
         if (prov_val !== undefined) {
-            request.input('prov_plant', sql.VarChar, prov_val && String(prov_val).trim() ? String(prov_val).trim() : null);
-            updates.push('PROV_PLANT = @prov_plant');
+            updates.push(`PROV_PLANT = $${paramIdx++}`);
+            values.push(prov_val && String(prov_val).trim() ? String(prov_val).trim() : null);
         }
 
         if (updates.length === 0) return res.json({ exito: true, mensaje: 'Sin cambios para actualizar.' });
 
-        await request.query(`UPDATE dbo.PLANTAS SET ${updates.join(', ')} WHERE ID_PLANTA = @id_planta`);
+        values.push(id_planta);
+        await pool.query(`UPDATE PLANTAS SET ${updates.join(', ')} WHERE ID_PLANTA = $${paramIdx}`, values);
         res.json({ exito: true, mensaje: 'Planta actualizada correctamente.' });
     } catch (err) {
         console.error('Error al actualizar planta:', err.message);
@@ -2283,7 +2238,7 @@ app.put('/api/plantas/:id', async (req, res) => {
     }
 });
 
-// RUTA MAESTRA PARA ACTUALIZAR CUALQUIER TABLA (CU-16 / CU-42 / CU-47 / CU-48 / CU-49 / RN-16 / RN-17 / RN-18 / RN-34 / RN-35: Acceso de Administrador; parametrización contra inyección SQL)
+// RUTA MAESTRA PARA ACTUALIZAR CUALQUIER TABLA (CU-16 / CU-42 / CU-47 / CU-48 / CU-49 / RN-16 / RN-17 / RN-18 / RN-34 / RN-35)
 app.put('/api/actualizar', async (req, res) => {
     try {
         const tienePermiso = await verificarAccesoAdmin(req, res);
@@ -2291,7 +2246,6 @@ app.put('/api/actualizar', async (req, res) => {
 
         const { tabla, idColumn, idValue, campos } = req.body || {};
         
-        // Validación de nombres de tabla y columna para seguridad
         if (!tabla || !/^[a-zA-Z0-9_]+$/.test(tabla)) {
             return res.status(400).json({ exito: false, error: 'Tabla inválida' });
         }
@@ -2378,14 +2332,12 @@ app.put('/api/actualizar', async (req, res) => {
                 : (campos?.['id_prov'] !== undefined ? campos['id_prov'] : campos?.['proveedor']);
             if (rawProv !== undefined && rawProv !== null && String(rawProv).trim() !== '') {
                 const provLimpio = String(rawProv).trim();
-                const checkProvReq = new sql.Request();
-                checkProvReq.input('id_prov_check', sql.VarChar, provLimpio);
-                const provCheck = await checkProvReq.query(`
-                    SELECT COUNT(*) as total 
-                    FROM dbo.PROVEEDORES 
-                    WHERE ID_PROV = @id_prov_check OR LTRIM(RTRIM(LOWER(NOM_PROV))) = LTRIM(RTRIM(LOWER(@id_prov_check)))
-                `);
-                if (provCheck.recordset[0].total === 0) {
+                const provCheck = await pool.query(`
+                    SELECT COUNT(*) AS "total" 
+                    FROM PROVEEDORES 
+                    WHERE ID_PROV = $1 OR TRIM(LOWER(NOM_PROV)) = TRIM(LOWER($1))
+                `, [provLimpio]);
+                if (parseInt(provCheck.rows[0].total) === 0) {
                     return res.status(400).json({
                         exito: false,
                         error: 'El proveedor seleccionado no existe en el sistema (RN-20).'
@@ -2404,14 +2356,12 @@ app.put('/api/actualizar', async (req, res) => {
             const rawProv = campos['PROV_PLANT'] !== undefined ? campos['PROV_PLANT'] : campos['prov_plant'];
             if (rawProv !== undefined && rawProv !== null && String(rawProv).trim() !== '') {
                 const provLimpio = String(rawProv).trim();
-                const checkProvReq = new sql.Request();
-                checkProvReq.input('id_prov_plant_check', sql.VarChar, provLimpio);
-                const provCheck = await checkProvReq.query(`
-                    SELECT COUNT(*) as total 
-                    FROM dbo.PROVEEDORES 
-                    WHERE ID_PROV = @id_prov_plant_check OR LTRIM(RTRIM(LOWER(NOM_PROV))) = LTRIM(RTRIM(LOWER(@id_prov_plant_check)))
-                `);
-                if (provCheck.recordset[0].total === 0) {
+                const provCheck = await pool.query(`
+                    SELECT COUNT(*) AS "total" 
+                    FROM PROVEEDORES 
+                    WHERE ID_PROV = $1 OR TRIM(LOWER(NOM_PROV)) = TRIM(LOWER($1))
+                `, [provLimpio]);
+                if (parseInt(provCheck.rows[0].total) === 0) {
                     return res.status(400).json({
                         exito: false,
                         error: 'El proveedor seleccionado no existe en el sistema (RN-20).'
@@ -2442,7 +2392,6 @@ app.put('/api/actualizar', async (req, res) => {
                 }
             }
 
-            // Sanitización para CLIENTES en Comentarios, Preferencia y Dirección contra Inyección SQL y etiquetas HTML (V-01 / V-07 / CU-52)
             for (const key of Object.keys(campos || {})) {
                 if (key.toUpperCase() === 'COM_CLI' || key.toLowerCase() === 'com_cli' ||
                     key.toUpperCase() === 'PREF_CLI' || key.toLowerCase() === 'pref_cli' ||
@@ -2462,7 +2411,6 @@ app.put('/api/actualizar', async (req, res) => {
             if (rawUsername !== undefined && rawUsername !== null && String(rawUsername).trim() !== '') {
                 const usernameLimpio = String(rawUsername).trim();
 
-                // Longitud máxima de 80 caracteres (RN-19: USERNAME VARCHAR(80))
                 if (usernameLimpio.length > 80) {
                     return res.status(400).json({
                         exito: false,
@@ -2470,16 +2418,13 @@ app.put('/api/actualizar', async (req, res) => {
                     });
                 }
 
-                const checkUserReq = new sql.Request();
-                checkUserReq.input('username_check', sql.VarChar(80), usernameLimpio);
-                checkUserReq.input('id_val_check', sql.VarChar, String(idValue));
-                const checkUser = await checkUserReq.query(`
-                    SELECT COUNT(*) as total 
-                    FROM dbo.USUARIOS 
-                    WHERE LTRIM(RTRIM(LOWER(USERNAME))) = LTRIM(RTRIM(LOWER(@username_check)))
-                      AND ${idColumn} != @id_val_check
-                `);
-                if (checkUser.recordset[0].total > 0) {
+                const checkUser = await pool.query(`
+                    SELECT COUNT(*) AS "total" 
+                    FROM USUARIOS 
+                    WHERE TRIM(LOWER(USERNAME)) = TRIM(LOWER($1))
+                      AND ${idColumn} != $2
+                `, [usernameLimpio, String(idValue)]);
+                if (parseInt(checkUser.rows[0].total) > 0) {
                     return res.status(400).json({
                         exito: false,
                         error: `Error UNIQUE: El nombre de usuario "${usernameLimpio}" ya existe en el sistema. Según la regla RN-13 (CP-13) el USERNAME debe ser único.`
@@ -2488,30 +2433,29 @@ app.put('/api/actualizar', async (req, res) => {
             }
         }
 
-        const request = new sql.Request();
         let setQuery = [];
+        let values = [];
+        let index = 1;
         
-        let index = 0;
         for (const key of Object.keys(campos || {})) {
             if (key !== idColumn && /^[a-zA-Z0-9_]+$/.test(key)) {
                 const valor = campos[key];
-                request.input(`val${index}`, valor !== '' && valor !== null && valor !== undefined ? valor : null);
-                setQuery.push(`${key} = @val${index}`);
+                values.push(valor !== '' && valor !== null && valor !== undefined ? valor : null);
+                setQuery.push(`${key} = $${index}`);
                 index++;
             }
         }
         
-        request.input('idValue', idValue);
-        
         if (setQuery.length === 0) return res.json({ exito: true });
 
-        const query = `UPDATE dbo.${tabla} SET ${setQuery.join(', ')} WHERE ${idColumn} = @idValue`;
-        await request.query(query);
+        values.push(idValue);
+        const query = `UPDATE ${tabla} SET ${setQuery.join(', ')} WHERE ${idColumn} = $${index}`;
+        await pool.query(query, values);
         
         res.json({ exito: true, mensaje: `Registro actualizado correctamente en ${tabla}` });
     } catch (err) {
         console.error('ERROR AL ACTUALIZAR:', err.message);
-        if (err.number === 2627 || err.number === 2601 || (err.message && err.message.toUpperCase().includes('UNIQUE'))) {
+        if (err.code === '23505' || (err.message && err.message.toUpperCase().includes('UNIQUE'))) {
             return res.status(400).json({
                 exito: false,
                 error: `Error UNIQUE: Violación de restricción UNIQUE. Ya existe un registro con ese valor en un campo único (RN-13 / CP-13). ${err.message}`
@@ -2521,15 +2465,13 @@ app.put('/api/actualizar', async (req, res) => {
     }
 });
 
-app.listen(3000, async () => {
-    console.log('Servidor corriendo en http://localhost:3000');
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, async () => {
+    console.log(`Servidor corriendo en puerto ${PORT}`);
     try {
-        if (process.env.DATABASE_URL) {
-            const client = await pool.connect();
-            console.log('Conexión exitosa a PostgreSQL (Supabase)');
-            client.release();
-        }
+        await pool.query('SELECT NOW()');
+        console.log('Conexión exitosa a PostgreSQL en Supabase');
     } catch (err) {
-        console.error('Error conectando a PostgreSQL:', err.message);
+        console.error('Error conectando a PostgreSQL:', err);
     }
 });
