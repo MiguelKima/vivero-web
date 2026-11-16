@@ -247,6 +247,13 @@ bdSim.registrarVenta({
     assert.ok(serverCode.includes('NUM_CAN, NUM_CAN_PLANT'), 'server.js debe insertar NUM_CAN y NUM_CAN_PLANT en VENTAS');
     assert.ok(serverCode.includes('UPDATE PRODUCTOS SET STOCK_PRO = GREATEST(COALESCE(STOCK_PRO, 0) - $1, 0)'), 'server.js debe descontar stock de producto al vender');
     assert.ok(serverCode.includes('UPDATE PLANTAS SET STOCK_PLANT = GREATEST(COALESCE(STOCK_PLANT, 0) - $1, 0)'), 'server.js debe descontar stock de planta al vender');
+    
+    // E40 en server.js: Alias con comillas y lectura defensiva en minúsculas y mayúsculas
+    assert.ok(serverCode.includes('SELECT ID_PRO AS "ID_PRO", DESC_PRO AS "DESC_PRO", STOCK_PRO AS "STOCK_PRO" FROM PRODUCTOS'), 'server.js debe usar alias con comillas para PRODUCTOS en ventas');
+    assert.ok(serverCode.includes('SELECT ID_PLANTA AS "ID_PLANTA", NOM_COM AS "NOM_COM", NOM_CTFO AS "NOM_CTFO", STOCK_PLANT AS "STOCK_PLANT" FROM PLANTAS'), 'server.js debe usar alias con comillas para PLANTAS en ventas');
+    assert.ok(serverCode.includes('pRow.STOCK_PRO !== undefined ? pRow.STOCK_PRO : pRow.stock_pro'), 'server.js debe leer STOCK_PRO y stock_pro');
+    assert.ok(serverCode.includes('plRow.STOCK_PLANT !== undefined ? plRow.STOCK_PLANT : plRow.stock_plant'), 'server.js debe leer STOCK_PLANT y stock_plant');
+    console.log('  [PASS] E40: Consultas con alias entre comillas y compatibilidad con minúsculas/mayúsculas confirmadas.');
     console.log('  [PASS] E37 y E38: Lógica de inventario y venta en server.js confirmada.');
 
     // E39 en server.js

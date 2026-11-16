@@ -1890,7 +1890,7 @@ app.post('/api/ventas', async (req, res) => {
         let cantProdFinal = 0;
 
         if (id_producto && typeof id_producto === 'string' && id_producto.trim()) {
-            const proCheck = await pool.query('SELECT ID_PRO, DESC_PRO, STOCK_PRO FROM PRODUCTOS WHERE TRIM(ID_PRO) = TRIM($1)', [id_producto.trim()]);
+            const proCheck = await pool.query('SELECT ID_PRO AS "ID_PRO", DESC_PRO AS "DESC_PRO", STOCK_PRO AS "STOCK_PRO" FROM PRODUCTOS WHERE TRIM(ID_PRO) = TRIM($1)', [id_producto.trim()]);
             if (proCheck.rows.length === 0) {
                 return res.status(400).json({ exito: false, error: `El producto seleccionado (${id_producto.trim()}) no existe en el sistema.` });
             }
@@ -1904,8 +1904,10 @@ app.post('/api/ventas', async (req, res) => {
             }
 
             cantProdFinal = (cant_producto !== undefined && cant_producto !== null && String(cant_producto).trim() !== '') ? cantProdNum : 1;
-            descProdSeleccionado = proCheck.rows[0].DESC_PRO || id_producto.trim();
-            stockProdDisponible = parseInt(proCheck.rows[0].STOCK_PRO, 10);
+            const pRow = proCheck.rows[0];
+            descProdSeleccionado = pRow.DESC_PRO || pRow.desc_pro || id_producto.trim();
+            const rawStockProd = pRow.STOCK_PRO !== undefined ? pRow.STOCK_PRO : pRow.stock_pro;
+            stockProdDisponible = parseInt(rawStockProd, 10);
             if (isNaN(stockProdDisponible)) stockProdDisponible = 0;
 
             // Validación E38: Comprobar stock disponible de producto
@@ -1922,7 +1924,7 @@ app.post('/api/ventas', async (req, res) => {
         let cantPlantFinal = 0;
 
         if (id_planta && typeof id_planta === 'string' && id_planta.trim()) {
-            const plantCheck = await pool.query('SELECT ID_PLANTA, NOM_COM, NOM_CTFO, STOCK_PLANT FROM PLANTAS WHERE TRIM(ID_PLANTA) = TRIM($1)', [id_planta.trim()]);
+            const plantCheck = await pool.query('SELECT ID_PLANTA AS "ID_PLANTA", NOM_COM AS "NOM_COM", NOM_CTFO AS "NOM_CTFO", STOCK_PLANT AS "STOCK_PLANT" FROM PLANTAS WHERE TRIM(ID_PLANTA) = TRIM($1)', [id_planta.trim()]);
             if (plantCheck.rows.length === 0) {
                 return res.status(400).json({ exito: false, error: `La planta seleccionada (${id_planta.trim()}) no existe en el sistema.` });
             }
@@ -1936,8 +1938,10 @@ app.post('/api/ventas', async (req, res) => {
             }
 
             cantPlantFinal = (cant_planta !== undefined && cant_planta !== null && String(cant_planta).trim() !== '') ? cantPlantNum : 1;
-            nomPlantaSeleccionada = plantCheck.rows[0].NOM_COM || plantCheck.rows[0].NOM_CTFO || id_planta.trim();
-            stockPlantDisponible = parseInt(plantCheck.rows[0].STOCK_PLANT, 10);
+            const plRow = plantCheck.rows[0];
+            nomPlantaSeleccionada = plRow.NOM_COM || plRow.nom_com || plRow.NOM_CTFO || plRow.nom_ctfo || id_planta.trim();
+            const rawStockPlant = plRow.STOCK_PLANT !== undefined ? plRow.STOCK_PLANT : plRow.stock_plant;
+            stockPlantDisponible = parseInt(rawStockPlant, 10);
             if (isNaN(stockPlantDisponible)) stockPlantDisponible = 0;
 
             // Validación E38: Comprobar stock disponible de planta
