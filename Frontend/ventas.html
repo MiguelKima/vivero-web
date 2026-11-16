@@ -3,26 +3,38 @@
 <head>
     <meta charset="UTF-8">
     <title>Registrar Venta</title>
+    <link rel="stylesheet" href="/style.css">
     <style>
         body { font-family: sans-serif; background: #f4f7f6; padding: 20px; }
-        .formulario { background: white; padding: 20px; border-radius: 8px; max-width: 400px; }
+        .formulario { background: white; padding: 20px; border-radius: 8px; max-width: 400px; margin: 0 auto; }
         input, button { width: 100%; padding: 10px; margin: 10px 0; box-sizing: border-box; }
-        button { background: #2d6a4f; color: white; border: none; cursor: pointer; }
+        button { background: #2d6a4f; color: white; border: none; cursor: pointer; border-radius: 4px; font-weight: bold; }
     </style>
 </head>
 <body>
-    <h2>💰 Registrar Nueva Venta</h2>
     <div class="formulario">
-        <!-- Aquí agregaremos los campos que tengas en tu tabla VENTAS -->
-        <input type="text" id="producto" placeholder="Nombre del producto">
-        <input type="number" id="cantidad" placeholder="Cantidad">
-        <input type="number" id="total" placeholder="Total ($)">
-        <button onclick="guardarVenta()">Guardar Venta</button>
+        <h2>💰 Módulo de Ventas</h2>
+        <p>Para registrar ventas completas con cálculo automático de saldos y emisión de tickets, utilice el módulo oficial de ventas.</p>
+        <button onclick="redirigirVentas()">Ir a Registro de Ventas</button>
     </div>
+
+    <!-- Modal Web Corporativo -->
+    <div id="modalMensaje" class="custom-modal">
+        <div class="custom-modal-content">
+            <h3 id="tituloModal">Aviso del Sistema</h3>
+            <p id="textoModal">Redirigiendo al módulo oficial de ventas...</p>
+            <button onclick="cerrarModal()">Aceptar</button>
+        </div>
+    </div>
+
     <script>
-        function guardarVenta() {
-            // Aquí conectaremos con el backend en el siguiente paso
-            alert("Botón presionado. Listo para conectar a SQL.");
+        function redirigirVentas() {
+            window.location.href = 'registro-venta.html';
+        }
+
+        function cerrarModal() {
+            document.getElementById('modalMensaje').style.display = 'none';
+            window.location.href = 'registro-venta.html';
         }
     </script>
 </body>

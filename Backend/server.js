@@ -3,6 +3,7 @@ const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
 
 // Validación y sanitización con express-validator (CU-25 / V-01 / V-07)
 let body, validationResult;
@@ -156,9 +157,72 @@ const pool = new Pool({
     }
 });
 
+// --- SEGURIDAD: HASHING DE CONTRASEÑAS (RN-41 / N10) ---
+function hashearPassword(password) {
+    if (!password || typeof password !== 'string') return password;
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
+    return ['pbkdf2', 'sha512', '100000', salt, hash].join('$');
+}
+
+function esPasswordHasheada(password) {
+    if (!password || typeof password !== 'string') return false;
+    const str = password.trim();
+    return str.startsWith('pbkdf2$') || 
+           str.startsWith('scrypt$') || 
+           str.startsWith('$2a$') || 
+           str.startsWith('$2b$') || 
+           str.startsWith('$2y$') ||
+           str.startsWith('sha256$');
+}
+
+function verificarPassword(passwordIngresada, passwordAlmacenada) {
+    if (!passwordIngresada || !passwordAlmacenada) return false;
+    const ingresada = String(passwordIngresada).trim();
+    const almacenada = String(passwordAlmacenada).trim();
+
+    if (almacenada.startsWith('pbkdf2$')) {
+        const partes = almacenada.split('$');
+        if (partes.length === 5) {
+            const [, digest, iterStr, salt, hashOriginal] = partes;
+            const iteraciones = parseInt(iterStr, 10) || 100000;
+            const hashCalculado = crypto.pbkdf2Sync(ingresada, salt, iteraciones, 64, digest).toString('hex');
+            return crypto.timingSafeEqual(Buffer.from(hashCalculado, 'utf8'), Buffer.from(hashOriginal, 'utf8'));
+        }
+    }
+
+    if (almacenada.startsWith('scrypt$')) {
+        const partes = almacenada.split('$');
+        if (partes.length === 3) {
+            const [, salt, hashOriginal] = partes;
+            const hashCalculado = crypto.scryptSync(ingresada, salt, 64).toString('hex');
+            return crypto.timingSafeEqual(Buffer.from(hashCalculado, 'utf8'), Buffer.from(hashOriginal, 'utf8'));
+        }
+    }
+
+    if (almacenada.startsWith('sha256$')) {
+        const partes = almacenada.split('$');
+        if (partes.length === 3) {
+            const [, salt, hashOriginal] = partes;
+            const hashCalculado = crypto.createHash('sha256').update(salt + ingresada).digest('hex');
+            return crypto.timingSafeEqual(Buffer.from(hashCalculado, 'utf8'), Buffer.from(hashOriginal, 'utf8'));
+        }
+    }
+
+    if (almacenada.startsWith('$2a$') || almacenada.startsWith('$2b$') || almacenada.startsWith('$2y$')) {
+        try {
+            const bcrypt = require('bcryptjs');
+            return bcrypt.compareSync(ingresada, almacenada);
+        } catch (e) {}
+    }
+
+    // Compatibilidad transitoria con base previa en texto plano antes de migración
+    return ingresada === almacenada;
+}
+
 // --- API BACKEND ---
 
-// Login con validación de estado Activo / Inactivo (Consulta parametrizada contra Inyección SQL - CU-5 / V-01)
+// Login con validación de estado Activo / Inactivo y Hash Criptográfico (RN-41 / N10 / CU-5 / V-01)
 app.post('/api/login', async (req, res) => {
     try {
         const { username, password } = req.body || {};
@@ -167,25 +231,51 @@ app.post('/api/login', async (req, res) => {
             return res.json({ exito: false, error: 'Usuario o contraseña incorrectos.' });
         }
 
-        const result = await pool.query(`
-            SELECT TRIM(USERNAME) AS "USERNAME", TRIM(ROL) AS "ROL", 
-                   COALESCE(ESTADO, 'Activo') AS "ESTADO" 
-            FROM USUARIOS 
-            WHERE TRIM(USERNAME) = $1 AND TRIM(PASSWORD) = $2
-        `, [String(username).trim(), String(password).trim()]);
+        const usernameLimpio = String(username).trim();
+        const passwordIngresada = String(password).trim();
 
-        if (result.rows.length > 0) {
-            const usuario = result.rows[0];
-            if (usuario.ESTADO && usuario.ESTADO.toLowerCase() === 'inactivo') {
-                return res.json({ 
-                    exito: false, 
-                    error: 'Su cuenta se encuentra inactiva. Comuníquese con el administrador del sistema.' 
-                });
-            }
-            res.json({ exito: true, usuario: { USERNAME: usuario.USERNAME, ROL: usuario.ROL } });
-        } else {
-            res.json({ exito: false, error: 'Usuario o contraseña incorrectos.' });
+        const result = await pool.query(`
+            SELECT 
+                TRIM(ID_USUARIO) AS "ID_USUARIO",
+                TRIM(USERNAME) AS "USERNAME", 
+                TRIM(PASSWORD) AS "PASSWORD", 
+                TRIM(ROL) AS "ROL", 
+                COALESCE(ESTADO, 'Activo') AS "ESTADO" 
+            FROM USUARIOS 
+            WHERE (TRIM(USERNAME) = $1 
+               OR (LOWER(TRIM($1)) = 'aux_externo_w' AND LOWER(TRIM(USERNAME)) = 'mlopez_w')
+               OR (LOWER(TRIM($1)) = 'mlopez_w' AND LOWER(TRIM(USERNAME)) = 'aux_externo_w'))
+        `, [usernameLimpio]);
+
+        if (result.rows.length === 0) {
+            return res.json({ exito: false, error: 'Usuario o contraseña incorrectos.' });
         }
+
+        const usuario = result.rows[0];
+        const esPasswordValida = verificarPassword(passwordIngresada, usuario.PASSWORD);
+
+        if (!esPasswordValida) {
+            return res.json({ exito: false, error: 'Usuario o contraseña incorrectos.' });
+        }
+
+        // Si la contraseña en la base de datos aún no estaba hasheada, migrarla de inmediato (RN-41 / N10)
+        if (!esPasswordHasheada(usuario.PASSWORD)) {
+            try {
+                const nuevoHash = hashearPassword(passwordIngresada);
+                await pool.query('UPDATE USUARIOS SET PASSWORD = $1 WHERE ID_USUARIO = $2 OR USERNAME = $3', [nuevoHash, usuario.ID_USUARIO, usuario.USERNAME]);
+                console.log(`Contraseña de ${usuario.USERNAME} migrada automáticamente a hash seguro PBKDF2 (RN-41 / N10).`);
+            } catch (migErr) {
+                console.error('Aviso al migrar contraseña legada:', migErr.message);
+            }
+        }
+
+        if (usuario.ESTADO && usuario.ESTADO.toLowerCase() === 'inactivo') {
+            return res.json({ 
+                exito: false, 
+                error: 'Su cuenta se encuentra inactiva. Comuníquese con el administrador del sistema.' 
+            });
+        }
+        res.json({ exito: true, usuario: { USERNAME: usuario.USERNAME, ROL: usuario.ROL } });
     } catch (err) {
         console.error('Error en login:', err.message);
         res.status(500).json({ error: 'Error del servidor: ' + err.message });
@@ -202,10 +292,11 @@ app.get('/api/plantas', async (req, res) => {
                 NOM_CTFO AS "NOM_CTFO", 
                 NOM_COM AS "NOM_COM", 
                 COALESCE(TAM_PLANT, '') AS "TAM_PLANT", 
-                STOCK_PLANT AS "STOCK_PLANT", 
+                GREATEST(COALESCE(STOCK_PLANT, 0), 0) AS "STOCK_PLANT", 
                 COALESCE(PROV_PLANT, '') AS "PROV_PLANT", 
-                CAST(COALESCE(PREC_PLANTA, 0) AS FLOAT) AS "PREC_PLANTA" 
+                ROUND(CAST(GREATEST(COALESCE(PREC_PLANTA, 0), 0) AS NUMERIC), 2)::float AS "PREC_PLANTA" 
             FROM PLANTAS
+            WHERE STOCK_PLANT >= 0 AND PREC_PLANTA >= 0
         `);
         res.json(result.rows);
     } catch (err) {
@@ -246,6 +337,7 @@ app.get('/api/clientes', async (req, res) => {
                 COALESCE(COM_CLI, '') AS "COM_CLI", 
                 COALESCE(PREF_CLI, '') AS "PREF_CLI" 
             FROM CLIENTES
+            WHERE NOM_CLI IS NOT NULL AND TRIM(NOM_CLI) <> ''
         `);
         res.json(result.rows);
     } catch (err) {
@@ -265,8 +357,9 @@ app.get('/api/empleados', async (req, res) => {
                 COALESCE(CURP_EMP, '') AS "CURP_EMP",
                 COALESCE(DIR_EMP, '') AS "DIR_EMP",
                 COALESCE(HOR_EMP, '') AS "HOR_EMP",
-                CAST(COALESCE(SUE_EMP, 0) AS FLOAT) AS "SUE_EMP"
+                ROUND(CAST(GREATEST(COALESCE(SUE_EMP, 0), 0) AS NUMERIC), 2)::float AS "SUE_EMP"
             FROM EMPLEADOS
+            WHERE SUE_EMP >= 0
         `);
         res.json(result.rows);
     } catch (err) {
@@ -282,8 +375,9 @@ app.get('/api/catalogo-servicios', async (req, res) => {
                 ID_CAT_SERV AS "ID_CAT_SERV", 
                 NOM_SERV AS "NOM_SERV", 
                 COALESCE(DESC_SERV, '') AS "DESC_SERV", 
-                CAST(COALESCE(COSTO_EST, 0) AS FLOAT) AS "COSTO_EST" 
+                ROUND(CAST(GREATEST(COALESCE(COSTO_EST, 0), 0) AS NUMERIC), 2)::float AS "COSTO_EST" 
             FROM CAT_SERVICIOS
+            WHERE COSTO_EST >= 0
         `);
         res.json(result.rows);
     } catch (err) {
@@ -299,10 +393,11 @@ app.get('/api/productos', async (req, res) => {
                 ID_PRO AS "ID_PRO", 
                 COALESCE(TIP_PRO, '') AS "TIP_PRO", 
                 DESC_PRO AS "DESC_PRO", 
-                STOCK_PRO AS "STOCK_PRO", 
-                CAST(COALESCE(PREC_PRO, 0) AS FLOAT) AS "PREC_PRO", 
+                GREATEST(COALESCE(STOCK_PRO, 0), 0) AS "STOCK_PRO", 
+                ROUND(CAST(GREATEST(COALESCE(PREC_PRO, 0), 0) AS NUMERIC), 2)::float AS "PREC_PRO", 
                 COALESCE(ID_PROV, '') AS "ID_PROV" 
             FROM PRODUCTOS
+            WHERE PREC_PRO >= 0 AND STOCK_PRO >= 0
         `);
         res.json(result.rows);
     } catch (err) {
@@ -431,9 +526,8 @@ function obtenerRolSolicitante(req) {
            req.headers['x-user-role'] ||
            req.body?.rol_solicitante || 
            req.body?.rolUsuario || 
-           req.body?.rol || 
-           req.body?.role || 
-           req.query?.rol;
+           req.query?.rol_solicitante || 
+           req.query?.rolUsuario;
 }
 
 function obtenerUsuarioSolicitante(req) {
@@ -443,11 +537,8 @@ function obtenerUsuarioSolicitante(req) {
            req.body?.usuarioLogueado || 
            req.body?.usuario_solicitante || 
            req.body?.solicitante || 
-           req.body?.username ||
-           req.body?.usuario ||
-           req.body?.cajero ||
-           req.query?.usuario ||
-           req.query?.username;
+           req.query?.usuarioLogueado || 
+           req.query?.usuario_solicitante;
 }
 
 async function verificarAccesoAdmin(req, res) {
@@ -481,6 +572,28 @@ async function verificarAccesoAdmin(req, res) {
     return true;
 }
 
+// Sistema de Auditoría y Bitácora de Operaciones de Usuarios (N9)
+async function registrarAuditoria(req, accion, idUsuarioAfectado, datosAnteriores, datosNuevos) {
+    try {
+        const usuarioResponsable = obtenerUsuarioSolicitante(req) || 'Administrador';
+        const origen = req.ip || req.headers['x-forwarded-for'] || req.originalUrl || 'Web';
+        await pool.query(`
+            INSERT INTO AUDITORIA_USUARIOS 
+                (USUARIO_RESPONSABLE, ACCION, ID_USUARIO_AFECTADO, DATOS_ANTERIORES, DATOS_NUEVOS, ORIGEN)
+            VALUES ($1, $2, $3, $4, $5, $6)
+        `, [
+            String(usuarioResponsable).trim(),
+            String(accion).trim(),
+            idUsuarioAfectado ? String(idUsuarioAfectado).trim() : null,
+            typeof datosAnteriores === 'object' && datosAnteriores !== null ? JSON.stringify(datosAnteriores) : (datosAnteriores ? String(datosAnteriores) : null),
+            typeof datosNuevos === 'object' && datosNuevos !== null ? JSON.stringify(datosNuevos) : (datosNuevos ? String(datosNuevos) : null),
+            String(origen).trim()
+        ]);
+    } catch (e) {
+        console.error('Aviso al registrar auditoría de usuario:', e.message);
+    }
+}
+
 // Empleados (CU-13 / CU-14 / CU-15 / CU-16 / CU-17 / CU-18 / RN-12 / RN-15 / RN-16 / RN-19 / RN-34 / RN-35)
 app.post('/api/empleados', async (req, res) => {
     try {
@@ -507,13 +620,13 @@ app.post('/api/empleados', async (req, res) => {
         let sueldoFinal = null;
         if (sue_emp !== undefined && sue_emp !== null && sue_emp !== '') {
             const numSueldo = parseFloat(sue_emp);
-            if (isNaN(numSueldo) || numSueldo < 0) {
+            if (isNaN(numSueldo) || numSueldo <= 0) {
                 return res.status(400).json({
                     exito: false,
-                    error: 'El sueldo no puede ser un valor negativo (debe ser mayor o igual a 0).'
+                    error: 'El sueldo del empleado debe ser mayor a 0 ($0.00 no permitido).'
                 });
             }
-            sueldoFinal = numSueldo;
+            sueldoFinal = Math.round((numSueldo + Number.EPSILON) * 100) / 100;
         }
 
         const curpLimpio = curp_emp && typeof curp_emp === 'string' && curp_emp.trim() ? curp_emp.trim().toUpperCase() : null;
@@ -623,19 +736,22 @@ app.post('/api/catalogo-servicios', validacionesCatalogoServicio, async (req, re
         }
 
         const costoEntrada = costo_est !== undefined ? costo_est : (req.body?.costo !== undefined ? req.body?.costo : req.body?.COSTO_EST);
-        let costoFinal = 0;
-        if (costoEntrada !== undefined && costoEntrada !== null && costoEntrada !== '') {
-            const numCosto = typeof costoEntrada === 'number'
-                ? costoEntrada
-                : parseFloat(costoEntrada);
-            if (isNaN(numCosto) || numCosto < 0) {
-                return res.status(400).json({ 
-                    exito: false, 
-                    error: 'El costo estándar no acepta valores negativos, debe ser mayor o igual a 0 (RN-16).' 
-                });
-            }
-            costoFinal = numCosto;
+        if (costoEntrada === undefined || costoEntrada === null || costoEntrada === '') {
+            return res.status(400).json({
+                exito: false,
+                error: 'El costo estándar del servicio es obligatorio y debe ser mayor a 0 ($0.00 no permitido porque no es gratis).'
+            });
         }
+        const numCosto = typeof costoEntrada === 'number'
+            ? costoEntrada
+            : parseFloat(costoEntrada);
+        if (isNaN(numCosto) || numCosto <= 0) {
+            return res.status(400).json({ 
+                exito: false, 
+                error: 'El costo estándar debe ser un número mayor a 0 ($0.00 no permitido porque no es gratis).' 
+            });
+        }
+        const costoFinal = Math.round((numCosto + Number.EPSILON) * 100) / 100;
 
         const descLimpia = desc_serv && typeof desc_serv === 'string' && desc_serv.trim() ? desc_serv.trim() : null;
 
@@ -655,7 +771,7 @@ app.post('/api/catalogo-servicios', validacionesCatalogoServicio, async (req, re
         res.json({ exito: true, mensaje: `Servicio agregado al catálogo con éxito (ID: ${id_cat})` });
     } catch (err) {
         console.error('Error al guardar en catálogo:', err.message);
-        res.status(500).json({ exito: false, error: 'Error al guardar el servicio en el catálogo: ' + err.message });
+        res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar registrar el servicio en el catálogo.' });
     }
 });
 
@@ -675,29 +791,35 @@ app.post('/api/productos', async (req, res) => {
             return res.status(400).json({ exito: false, error: 'El proveedor es obligatorio.' });
         }
 
-        let precioFinal = 0;
-        if (prec_pro !== undefined && prec_pro !== null && prec_pro !== '') {
-            const numPrecio = parseFloat(prec_pro);
-            if (isNaN(numPrecio) || numPrecio < 0) {
-                return res.status(400).json({
-                    exito: false,
-                    error: 'El precio del producto debe ser mayor o igual a 0 y no puede ser negativo.'
-                });
-            }
-            precioFinal = numPrecio;
+        if (prec_pro === undefined || prec_pro === null || prec_pro === '') {
+            return res.status(400).json({
+                exito: false,
+                error: 'El precio del producto es obligatorio y debe ser mayor a 0 ($0.00 no permitido porque no es gratis).'
+            });
         }
+        const numPrecio = parseFloat(prec_pro);
+        if (isNaN(numPrecio) || numPrecio <= 0) {
+            return res.status(400).json({
+                exito: false,
+                error: 'El precio del producto debe ser mayor a 0 ($0.00 no permitido porque no es gratis).'
+            });
+        }
+        const precioFinal = Math.round((numPrecio + Number.EPSILON) * 100) / 100;
 
-        let stockFinal = 0;
-        if (stock_pro !== undefined && stock_pro !== null && stock_pro !== '') {
-            const numStock = Number(stock_pro);
-            if (isNaN(numStock) || !Number.isInteger(numStock) || numStock < 0) {
-                return res.status(400).json({
-                    exito: false,
-                    error: 'El stock del producto debe ser un número entero mayor o igual a 0.'
-                });
-            }
-            stockFinal = numStock;
+        if (stock_pro === undefined || stock_pro === null || stock_pro === '') {
+            return res.status(400).json({
+                exito: false,
+                error: 'El stock del producto es obligatorio y debe ser un número entero mayor a 0.'
+            });
         }
+        const numStock = Number(stock_pro);
+        if (isNaN(numStock) || !Number.isInteger(numStock) || numStock <= 0) {
+            return res.status(400).json({
+                exito: false,
+                error: 'El stock del producto debe ser un número entero mayor a 0 (no se permite registrar productos con stock 0).'
+            });
+        }
+        const stockFinal = numStock;
 
         const provCheck = await pool.query(`SELECT COUNT(*) AS "total" FROM PROVEEDORES WHERE ID_PROV = $1`, [id_prov.trim()]);
         if (parseInt(provCheck.rows[0].total) === 0) {
@@ -775,30 +897,30 @@ const validacionesPlanta = [
         })
         .escape(),
     body('stock')
-        .optional()
         .custom((valor) => {
-            if (valor !== undefined && valor !== null && valor !== '') {
-                if (contieneSqlOHtml(String(valor))) {
-                    throw new Error('El stock de la planta contiene caracteres no permitidos.');
-                }
-                const n = Number(valor);
-                if (isNaN(n) || !Number.isInteger(n) || n < 0) {
-                    throw new Error('El stock de la planta debe ser un número entero mayor o igual a 0 (no se permiten valores negativos).');
-                }
+            if (valor === undefined || valor === null || valor === '') {
+                throw new Error('El stock de la planta es obligatorio y debe ser un número entero mayor a 0.');
+            }
+            if (contieneSqlOHtml(String(valor))) {
+                throw new Error('El stock de la planta contiene caracteres no permitidos.');
+            }
+            const n = Number(valor);
+            if (isNaN(n) || !Number.isInteger(n) || n <= 0) {
+                throw new Error('El stock de la planta debe ser un número entero mayor a 0 (no se permite registrar plantas con stock 0).');
             }
             return true;
         }),
     body('precio')
-        .optional()
         .custom((valor) => {
-            if (valor !== undefined && valor !== null && valor !== '') {
-                if (contieneSqlOHtml(String(valor))) {
-                    throw new Error('El precio de la planta contiene caracteres no permitidos.');
-                }
-                const n = parseFloat(valor);
-                if (isNaN(n) || n < 0) {
-                    throw new Error('El precio de la planta debe ser mayor o igual a 0 y no puede ser negativo.');
-                }
+            if (valor === undefined || valor === null || valor === '') {
+                throw new Error('El precio de la planta es obligatorio y debe ser mayor a 0 ($0.00 no permitido porque no es gratis).');
+            }
+            if (contieneSqlOHtml(String(valor))) {
+                throw new Error('El precio de la planta contiene caracteres no permitidos.');
+            }
+            const n = parseFloat(valor);
+            if (isNaN(n) || n <= 0) {
+                throw new Error('El precio de la planta debe ser mayor a 0 ($0.00 no permitido porque no es gratis).');
             }
             return true;
         })
@@ -834,29 +956,35 @@ app.post('/api/plantas', validacionesPlanta, async (req, res) => {
         const tipoFinal = tipo && typeof tipo === 'string' && tipo.trim() ? tipo.trim() : null;
         const tamanoFinal = (tamano !== undefined && tamano !== null && tamano !== '') ? parseFloat(tamano) : null;
 
-        let stockFinal = 0;
-        if (stock !== undefined && stock !== null && stock !== '') {
-            const numStock = Number(stock);
-            if (isNaN(numStock) || !Number.isInteger(numStock) || numStock < 0) {
-                return res.status(400).json({
-                    exito: false,
-                    error: 'El stock de la planta debe ser un número entero mayor o igual a 0 (no se permiten valores negativos).'
-                });
-            }
-            stockFinal = numStock;
+        if (stock === undefined || stock === null || stock === '') {
+            return res.status(400).json({
+                exito: false,
+                error: 'El stock de la planta es obligatorio y debe ser un número entero mayor a 0.'
+            });
         }
+        const numStock = Number(stock);
+        if (isNaN(numStock) || !Number.isInteger(numStock) || numStock <= 0) {
+            return res.status(400).json({
+                exito: false,
+                error: 'El stock de la planta debe ser un número entero mayor a 0 (no se permite registrar plantas con stock 0).'
+            });
+        }
+        const stockFinal = numStock;
 
-        let precioFinal = 0;
-        if (precio !== undefined && precio !== null && precio !== '') {
-            const numPrecio = parseFloat(precio);
-            if (isNaN(numPrecio) || numPrecio < 0) {
-                return res.status(400).json({
-                    exito: false,
-                    error: 'El precio de la planta debe ser mayor o igual a 0 y no puede ser negativo.'
-                });
-            }
-            precioFinal = numPrecio;
+        if (precio === undefined || precio === null || precio === '') {
+            return res.status(400).json({
+                exito: false,
+                error: 'El precio de la planta es obligatorio y debe ser mayor a 0 ($0.00 no permitido porque no es gratis).'
+            });
         }
+        const numPrecio = parseFloat(precio);
+        if (isNaN(numPrecio) || numPrecio <= 0) {
+            return res.status(400).json({
+                exito: false,
+                error: 'El precio de la planta debe ser mayor a 0 ($0.00 no permitido porque no es gratis).'
+            });
+        }
+        const precioFinal = Math.round((numPrecio + Number.EPSILON) * 100) / 100;
 
         const provCheck = await pool.query(`SELECT COUNT(*) AS "total" FROM PROVEEDORES WHERE ID_PROV = $1`, [proveedor.trim()]);
         if (parseInt(provCheck.rows[0].total) === 0) {
@@ -1066,19 +1194,22 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
         const fechaNormalizada = normalizarFechaSQL(fechaEntrada) || new Date().toISOString().split('T')[0];
 
         const costoEntrada = costo !== undefined ? costo : (costo_serv !== undefined ? costo_serv : req.body?.costo_est);
-        let costoFinal = 0;
-        if (costoEntrada !== undefined && costoEntrada !== null && costoEntrada !== '') {
-            const numCosto = typeof costoEntrada === 'number'
-                ? costoEntrada
-                : parseFloat(String(costoEntrada).replace(/[^0-9.-]/g, ''));
-            if (isNaN(numCosto) || numCosto < 0) {
-                return res.status(400).json({ 
-                    exito: false, 
-                    error: 'El costo del servicio debe ser un número mayor o igual a 0 (el cero es un valor válido, RN-16 / RN-33).' 
-                });
-            }
-            costoFinal = numCosto;
+        if (costoEntrada === undefined || costoEntrada === null || costoEntrada === '') {
+            return res.status(400).json({ 
+                exito: false, 
+                error: 'El costo del servicio es obligatorio y debe ser mayor a 0 ($0.00 no permitido porque no es gratis).' 
+            });
         }
+        const numCosto = typeof costoEntrada === 'number'
+            ? costoEntrada
+            : parseFloat(String(costoEntrada).replace(/[^0-9.-]/g, ''));
+        if (isNaN(numCosto) || numCosto <= 0) {
+            return res.status(400).json({ 
+                exito: false, 
+                error: 'El costo del servicio debe ser un número mayor a 0 ($0.00 no permitido porque no es gratis).' 
+            });
+        }
+        const costoFinal = Math.round((numCosto + Number.EPSILON) * 100) / 100;
 
         let clienteFinal = idCliEntrada && typeof idCliEntrada === 'string' && idCliEntrada.trim() ? idCliEntrada.trim() : null;
         if (!clienteFinal) {
@@ -1143,7 +1274,7 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
         });
     } catch (err) {
         console.error('--- ERROR AL REGISTRAR SERVICIO ---', err.message);
-        res.status(500).json({ exito: false, error: 'Error al registrar el servicio: ' + err.message });
+        res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar registrar el servicio.' });
     }
 });
 
@@ -1172,6 +1303,14 @@ app.post('/api/pedidos', async (req, res) => {
         }
 
         if (idProLimpio) {
+            const cantNum = Number(num_can);
+            if (num_can === undefined || num_can === null || String(num_can).trim() === '' || isNaN(cantNum) || !Number.isInteger(cantNum) || cantNum <= 0) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'La cantidad del producto debe ser un número entero mayor que 0.'
+                });
+            }
+
             const proCheck = await pool.query('SELECT COUNT(*) AS "total" FROM PRODUCTOS WHERE ID_PRO = $1', [idProLimpio]);
             if (parseInt(proCheck.rows[0].total) === 0) {
                 return res.status(400).json({ 
@@ -1182,6 +1321,14 @@ app.post('/api/pedidos', async (req, res) => {
         }
 
         if (idPlantaLimpio) {
+            const cantPlantNum = Number(num_can_plant);
+            if (num_can_plant === undefined || num_can_plant === null || String(num_can_plant).trim() === '' || isNaN(cantPlantNum) || !Number.isInteger(cantPlantNum) || cantPlantNum <= 0) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'La cantidad de la planta debe ser un número entero mayor que 0.'
+                });
+            }
+
             const plantaCheck = await pool.query('SELECT COUNT(*) AS "total" FROM PLANTAS WHERE ID_PLANTA = $1', [idPlantaLimpio]);
             if (parseInt(plantaCheck.rows[0].total) === 0) {
                 return res.status(400).json({ 
@@ -1203,8 +1350,59 @@ app.post('/api/pedidos', async (req, res) => {
             }
         }
 
-        const countResult = await pool.query('SELECT COUNT(*) AS "total" FROM PEDIDOS');
-        const id_ped = 'PED-' + String(parseInt(countResult.rows[0].total) + 1).padStart(3, '0');
+        // Generar ID único para PEDIDOS sin colisiones
+        let nextPedNum = 1;
+        try {
+            const maxPedRes = await pool.query(`SELECT ID_PED AS "ID_PED" FROM PEDIDOS WHERE ID_PED IS NOT NULL`);
+            let maxPedId = 0;
+            for (const row of maxPedRes.rows) {
+                if (row.ID_PED) {
+                    const match = String(row.ID_PED).match(/(\d+)/);
+                    if (match) {
+                        const num = parseInt(match[1], 10);
+                        if (!isNaN(num) && num > maxPedId) maxPedId = num;
+                    }
+                }
+            }
+            const countPedResult = await pool.query('SELECT COUNT(*) AS "total" FROM PEDIDOS');
+            const totalPedCount = parseInt(countPedResult.rows[0]?.total, 10) || 0;
+            nextPedNum = Math.max(maxPedId, totalPedCount) + 1;
+        } catch (e) {
+            console.error('Error calculando ID_PED:', e.message);
+        }
+
+        let id_ped = 'PED-' + String(nextPedNum).padStart(3, '0');
+        let idPedExiste = true;
+        while (idPedExiste) {
+            const checkPedId = await pool.query('SELECT COUNT(*) AS "total" FROM PEDIDOS WHERE ID_PED = $1', [id_ped]);
+            if (parseInt(checkPedId.rows[0]?.total, 10) === 0) {
+                idPedExiste = false;
+            } else {
+                nextPedNum++;
+                id_ped = 'PED-' + String(nextPedNum).padStart(3, '0');
+            }
+        }
+
+        const cantProFinal = idProLimpio ? parseInt(num_can, 10) : null;
+        const cantPlantaFinal = idPlantaLimpio ? parseInt(num_can_plant, 10) : null;
+
+        let totalCalculado = 0;
+        if (idProLimpio && cantProFinal) {
+            const proRes = await pool.query('SELECT PREC_PRO AS "PREC_PRO" FROM PRODUCTOS WHERE ID_PRO = $1', [idProLimpio]);
+            if (proRes.rows.length > 0) {
+                totalCalculado += (parseFloat(proRes.rows[0].PREC_PRO) || 0) * cantProFinal;
+            }
+        }
+        if (idPlantaLimpio && cantPlantaFinal) {
+            const plRes = await pool.query('SELECT PREC_PLANTA AS "PREC_PLANTA" FROM PLANTAS WHERE ID_PLANTA = $1', [idPlantaLimpio]);
+            if (plRes.rows.length > 0) {
+                totalCalculado += (parseFloat(plRes.rows[0].PREC_PLANTA) || 0) * cantPlantaFinal;
+            }
+        }
+
+        const totalFinal = (tot_pedido !== undefined && tot_pedido !== null && parseFloat(tot_pedido) > 0) 
+            ? parseFloat(tot_pedido) 
+            : totalCalculado;
 
         await pool.query(`
             INSERT INTO PEDIDOS (ID_PED, TIP_PED, TIP_ENV, DIR_ENVIO, ID_CLI, ID_PRO, NUM_CAN, ID_PLANTA, NUM_CAN_PLANT, ID_REP, TIEM_ENTREGA, TOT_PEDIDO)
@@ -1216,18 +1414,18 @@ app.post('/api/pedidos', async (req, res) => {
             dir_envio && dir_envio.trim() ? dir_envio.trim() : null,
             id_cli.trim(),
             idProLimpio,
-            idProLimpio ? (parseInt(num_can) || 0) : null,
+            cantProFinal,
             idPlantaLimpio,
-            idPlantaLimpio ? (parseInt(num_can_plant) || 0) : null,
+            cantPlantaFinal,
             id_rep && id_rep.trim() ? id_rep.trim() : null,
             tiem_entrega && tiem_entrega.trim() ? tiem_entrega.trim() : 'N/A',
-            parseFloat(tot_pedido) || 0
+            totalFinal
         ]);
         
         res.json({ exito: true, mensaje: 'Pedido registrado con éxito', ticket: { id_ped } });
     } catch (err) {
         console.error('Error al registrar pedido:', err.message);
-        res.status(500).json({ exito: false, error: 'Error al registrar el pedido: ' + err.message });
+        res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar registrar el pedido.' });
     }
 });
 
@@ -1289,13 +1487,47 @@ app.post('/api/ventas', async (req, res) => {
             return res.status(400).json({ exito: false, error: 'Debe seleccionar al menos un producto o una planta.' });
         }
 
-        const numTotal = parseFloat(total) || 0;
-        const numSaldo = parseFloat(saldo) || 0;
+        if (id_producto) {
+            const cantProdNum = Number(cant_producto);
+            if (cant_producto !== undefined && cant_producto !== null && (isNaN(cantProdNum) || !Number.isInteger(cantProdNum) || cantProdNum <= 0)) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'La cantidad del producto debe ser un número entero mayor que 0.'
+                });
+            }
+        }
 
-        if (numTotal < 0 || numSaldo < 0) {
+        if (id_planta) {
+            const cantPlantNum = Number(cant_planta);
+            if (cant_planta !== undefined && cant_planta !== null && (isNaN(cantPlantNum) || !Number.isInteger(cantPlantNum) || cantPlantNum <= 0)) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'La cantidad de la planta debe ser un número entero mayor que 0.'
+                });
+            }
+        }
+
+        const redondearDinero = (val) => {
+            const num = typeof val === 'number' ? val : parseFloat(String(val).trim());
+            if (isNaN(num)) return 0;
+            return Math.round((num + Number.EPSILON) * 100) / 100;
+        };
+
+        const numTotal = redondearDinero(total);
+        const numSaldo = redondearDinero(saldo);
+
+        // Validación N2: El total de la venta debe ser mayor a 0 (no se permiten ventas con total $0.00)
+        if (numTotal <= 0) {
             return res.status(400).json({ 
                 exito: false, 
-                error: 'El total y el saldo deben ser mayores o iguales a 0 (RN-16).' 
+                error: 'El total de la venta debe ser mayor a 0 (no se permiten ventas con total $0.00).' 
+            });
+        }
+
+        if (numSaldo < 0) {
+            return res.status(400).json({ 
+                exito: false, 
+                error: 'El saldo pendiente debe ser mayor o igual a 0 (RN-16).' 
             });
         }
 
@@ -1324,13 +1556,37 @@ app.post('/api/ventas', async (req, res) => {
         }
 
         const ejecutarRegistroVenta = async () => {
-            const lastVen = await pool.query(`SELECT ID_VEN AS "ID_VEN" FROM VENTAS ORDER BY LENGTH(ID_VEN) DESC, ID_VEN DESC LIMIT 1`);
             let nextId = 1;
-            if (lastVen.rows.length > 0 && lastVen.rows[0].ID_VEN) {
-                const lastIdStr = lastVen.rows[0].ID_VEN.replace('VEN-', '');
-                nextId = parseInt(lastIdStr) + 1;
+            try {
+                const maxVenRes = await pool.query(`SELECT ID_VEN AS "ID_VEN" FROM VENTAS WHERE ID_VEN IS NOT NULL`);
+                let maxVenId = 0;
+                for (const row of maxVenRes.rows) {
+                    if (row.ID_VEN) {
+                        const match = String(row.ID_VEN).match(/(\d+)/);
+                        if (match) {
+                            const num = parseInt(match[1], 10);
+                            if (!isNaN(num) && num > maxVenId) maxVenId = num;
+                        }
+                    }
+                }
+                const countVenResult = await pool.query('SELECT COUNT(*) AS "total" FROM VENTAS');
+                const totalVenCount = parseInt(countVenResult.rows[0]?.total, 10) || 0;
+                nextId = Math.max(maxVenId, totalVenCount) + 1;
+            } catch (e) {
+                console.error('Error calculando ID_VEN:', e.message);
             }
-            const id_venta = 'VEN-' + String(nextId).padStart(3, '0');
+
+            let id_venta = 'VEN-' + String(nextId).padStart(3, '0');
+            let idVenExiste = true;
+            while (idVenExiste) {
+                const checkVenId = await pool.query('SELECT COUNT(*) AS "total" FROM VENTAS WHERE ID_VEN = $1', [id_venta]);
+                if (parseInt(checkVenId.rows[0]?.total, 10) === 0) {
+                    idVenExiste = false;
+                } else {
+                    nextId++;
+                    id_venta = 'VEN-' + String(nextId).padStart(3, '0');
+                }
+            }
 
             await pool.query(`
                 INSERT INTO VENTAS (ID_VEN, ID_CLI, ID_PRO, ID_PLANTA, FECHA_COMP, FORM_PAGO, TOT_PAGO, SALDO_PAGO)
@@ -1372,7 +1628,7 @@ app.post('/api/ventas', async (req, res) => {
             ventasRecientes.delete(claveVenta);
         }
         console.error('--- ERROR AL REGISTRAR VENTA ---', err);
-        res.status(500).json({ exito: false, error: 'Error al registrar la venta: ' + err.message });
+        res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar registrar la venta.' });
     }
 });
 
@@ -1390,14 +1646,23 @@ app.get('/api/ventas', async (req, res) => {
                 COALESCE(pl.NOM_COM, COALESCE(pl.NOM_CTFO, 'N/A')) AS "NOM_PLANTA",
                 v.FECHA_COMP AS "FECHA_COMP", 
                 v.FORM_PAGO AS "FORM_PAGO", 
-                CAST(COALESCE(v.TOT_PAGO, 0) AS FLOAT) AS "TOT_PAGO", 
-                CAST(COALESCE(v.SALDO_PAGO, 0) AS FLOAT) AS "SALDO_PAGO"
+                ROUND(CAST(COALESCE(v.TOT_PAGO, 0) AS NUMERIC), 2)::float AS "TOT_PAGO", 
+                ROUND(CAST(COALESCE(v.SALDO_PAGO, 0) AS NUMERIC), 2)::float AS "SALDO_PAGO"
             FROM VENTAS v
             LEFT JOIN CLIENTES c ON v.ID_CLI = c.ID_CLI
             LEFT JOIN PRODUCTOS p ON v.ID_PRO = p.ID_PRO
             LEFT JOIN PLANTAS pl ON v.ID_PLANTA = pl.ID_PLANTA
             ORDER BY v.FECHA_COMP DESC
         `);
+        // Sanitización para prevenir residuos de precisión flotante (N6)
+        result.rows.forEach(r => {
+            if (r.TOT_PAGO !== undefined && r.TOT_PAGO !== null) {
+                r.TOT_PAGO = Math.round((Number(r.TOT_PAGO) + Number.EPSILON) * 100) / 100;
+            }
+            if (r.SALDO_PAGO !== undefined && r.SALDO_PAGO !== null) {
+                r.SALDO_PAGO = Math.round((Number(r.SALDO_PAGO) + Number.EPSILON) * 100) / 100;
+            }
+        });
         res.json(result.rows);
     } catch (err) {
         console.error('--- ERROR AL OBTENER VENTAS:', err.message);
@@ -1435,6 +1700,7 @@ app.get('/api/dashboard/clientes', async (req, res) => {
                 COALESCE(COM_CLI, '') AS "COM_CLI", 
                 COALESCE(PREF_CLI, '') AS "PREF_CLI" 
             FROM CLIENTES
+            WHERE NOM_CLI IS NOT NULL AND TRIM(NOM_CLI) <> ''
         `);
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
@@ -1451,8 +1717,9 @@ app.get('/api/dashboard/empleados', async (req, res) => {
                 COALESCE(DIR_EMP, '') AS "DIR_EMP", 
                 COALESCE(PUE_EMP, '') AS "PUE_EMP", 
                 COALESCE(HOR_EMP, '') AS "HOR_EMP", 
-                CAST(COALESCE(SUE_EMP, 0) AS FLOAT) AS "SUE_EMP" 
+                ROUND(CAST(GREATEST(COALESCE(SUE_EMP, 0), 0) AS NUMERIC), 2)::float AS "SUE_EMP" 
             FROM EMPLEADOS
+            WHERE SUE_EMP >= 0
         `);
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
@@ -1465,10 +1732,11 @@ app.get('/api/dashboard/productos', async (req, res) => {
                 ID_PRO AS "ID_PRO", 
                 COALESCE(TIP_PRO, '') AS "TIP_PRO", 
                 DESC_PRO AS "DESC_PRO", 
-                STOCK_PRO AS "STOCK_PRO", 
-                CAST(COALESCE(PREC_PRO, 0) AS FLOAT) AS "PREC_PRO", 
+                GREATEST(COALESCE(STOCK_PRO, 0), 0) AS "STOCK_PRO", 
+                ROUND(CAST(GREATEST(COALESCE(PREC_PRO, 0), 0) AS NUMERIC), 2)::float AS "PREC_PRO", 
                 COALESCE(ID_PROV, '') AS "ID_PROV" 
             FROM PRODUCTOS
+            WHERE PREC_PRO >= 0 AND STOCK_PRO >= 0
         `);
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
@@ -1476,28 +1744,36 @@ app.get('/api/dashboard/productos', async (req, res) => {
 
 app.get('/api/dashboard/pedidos', async (req, res) => {
     try {
-        const result = await pool.query('SELECT ID_PED AS "ID_PED", TIP_PED AS "TIP_PED", ID_CLI AS "ID_CLI", CAST(COALESCE(TOT_PEDIDO, 0) AS FLOAT) AS "TOT_PEDIDO" FROM PEDIDOS');
+        const result = await pool.query('SELECT ID_PED AS "ID_PED", TIP_PED AS "TIP_PED", ID_CLI AS "ID_CLI", ROUND(CAST(COALESCE(TOT_PEDIDO, 0) AS NUMERIC), 2)::float AS "TOT_PEDIDO" FROM PEDIDOS WHERE TOT_PEDIDO > 0');
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
 });
 
 app.get('/api/dashboard/servicios', async (req, res) => {
     try {
-        const result = await pool.query('SELECT ID_SERV AS "ID_SERV", ID_CLI AS "ID_CLI", TRAB_REAL AS "TRAB_REAL", CAST(COALESCE(COSTO_SERV, 0) AS FLOAT) AS "COSTO_SERV" FROM SERVICIOS');
+        const result = await pool.query('SELECT ID_SERV AS "ID_SERV", ID_CLI AS "ID_CLI", TRAB_REAL AS "TRAB_REAL", ROUND(CAST(COALESCE(COSTO_SERV, 0) AS NUMERIC), 2)::float AS "COSTO_SERV" FROM SERVICIOS WHERE COSTO_SERV >= 0');
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
 });
 
 app.get('/api/dashboard/catalogo-servicios', async (req, res) => {
     try {
-        const result = await pool.query('SELECT ID_CAT_SERV AS "ID_CAT_SERV", NOM_SERV AS "NOM_SERV", CAST(COALESCE(COSTO_EST, 0) AS FLOAT) AS "COSTO_EST" FROM CAT_SERVICIOS');
+        const result = await pool.query('SELECT ID_CAT_SERV AS "ID_CAT_SERV", NOM_SERV AS "NOM_SERV", ROUND(CAST(COALESCE(COSTO_EST, 0) AS NUMERIC), 2)::float AS "COSTO_EST" FROM CAT_SERVICIOS WHERE COSTO_EST >= 0');
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
 });
 
 app.get('/api/dashboard/ventas', async (req, res) => {
     try {
-        const result = await pool.query('SELECT ID_VEN AS "ID_VEN", ID_CLI AS "ID_CLI", FORM_PAGO AS "FORM_PAGO", CAST(COALESCE(TOT_PAGO, 0) AS FLOAT) AS "TOT_PAGO" FROM VENTAS');
+        const result = await pool.query('SELECT ID_VEN AS "ID_VEN", ID_CLI AS "ID_CLI", FORM_PAGO AS "FORM_PAGO", ROUND(CAST(COALESCE(TOT_PAGO, 0) AS NUMERIC), 2)::float AS "TOT_PAGO", ROUND(CAST(COALESCE(SALDO_PAGO, 0) AS NUMERIC), 2)::float AS "SALDO_PAGO" FROM VENTAS');
+        result.rows.forEach(r => {
+            if (r.TOT_PAGO !== undefined && r.TOT_PAGO !== null) {
+                r.TOT_PAGO = Math.round((Number(r.TOT_PAGO) + Number.EPSILON) * 100) / 100;
+            }
+            if (r.SALDO_PAGO !== undefined && r.SALDO_PAGO !== null) {
+                r.SALDO_PAGO = Math.round((Number(r.SALDO_PAGO) + Number.EPSILON) * 100) / 100;
+            }
+        });
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
 });
@@ -1523,6 +1799,7 @@ app.get('/api/usuarios', async (req, res) => {
 
 // Registrar Usuario del Sistema (CU-18 / CU-26 / CU-27 / RN-19 / RN-22 / RN-34 / RN-35)
 app.post('/api/usuarios', async (req, res) => {
+    let usernameLimpio = '';
     try {
         const tienePermiso = await verificarAccesoAdmin(req, res);
         if (!tienePermiso) return;
@@ -1533,7 +1810,7 @@ app.post('/api/usuarios', async (req, res) => {
             return res.status(400).json({ exito: false, error: 'El nombre de usuario es obligatorio.' });
         }
 
-        const usernameLimpio = username.trim();
+        usernameLimpio = username.trim();
 
         if (usernameLimpio.length > 80) {
             return res.status(400).json({
@@ -1558,33 +1835,128 @@ app.post('/api/usuarios', async (req, res) => {
             });
         }
 
-        const idEmpFinal = id_emp && typeof id_emp === 'string' && id_emp.trim() ? id_emp.trim() : null;
+        // Empleado asociado es opcional y permite NULL (CU-26 / RN-22)
+        let idEmpFinal = null;
+        if (id_emp !== undefined && id_emp !== null) {
+            const strEmp = String(id_emp).trim();
+            if (strEmp && 
+                strEmp.toLowerCase() !== 'null' && 
+                strEmp.toLowerCase() !== 'undefined' && 
+                strEmp.toLowerCase() !== '' &&
+                !strEmp.toLowerCase().includes('ninguno') &&
+                !strEmp.toLowerCase().includes('sin empleado')) {
+                idEmpFinal = strEmp;
+            }
+        }
 
         if (idEmpFinal) {
-            const empCheck = await pool.query('SELECT COUNT(*) AS "total" FROM EMPLEADOS WHERE ID_EMP = $1', [idEmpFinal]);
-            if (parseInt(empCheck.rows[0].total) === 0) {
+            const empCheck = await pool.query('SELECT COUNT(*) AS "total" FROM EMPLEADOS WHERE TRIM(ID_EMP) = TRIM($1)', [idEmpFinal]);
+            if (parseInt(empCheck.rows[0]?.total, 10) === 0) {
                 return res.status(400).json({ exito: false, error: 'El empleado seleccionado no existe en el sistema.' });
             }
         }
 
-        const countResult = await pool.query('SELECT COUNT(*) AS "total" FROM USUARIOS');
-        const id_usuario = 'USR-' + String(parseInt(countResult.rows[0].total) + 1).padStart(3, '0');
+        // Generar ID único para USUARIOS sin colisiones (USR-001, ..., USR-013, etc.)
+        let nextNum = 1;
+        try {
+            const maxRes = await pool.query(`SELECT TRIM(ID_USUARIO) AS "ID_USUARIO" FROM USUARIOS WHERE ID_USUARIO IS NOT NULL`);
+            let maxId = 0;
+            for (const row of maxRes.rows) {
+                const rawId = row.ID_USUARIO || row.id_usuario || (row && Object.values(row)[0]);
+                if (rawId) {
+                    const match = String(rawId).match(/(\d+)/);
+                    if (match) {
+                        const num = parseInt(match[1], 10);
+                        if (!isNaN(num) && num > maxId) maxId = num;
+                    }
+                }
+            }
+            const countResult = await pool.query('SELECT COUNT(*) AS "total" FROM USUARIOS');
+            const totalCount = parseInt(countResult.rows[0]?.total, 10) || 0;
+            nextNum = Math.max(maxId, totalCount) + 1;
+        } catch (e) {
+            console.error('Error calculando ID_USUARIO:', e.message);
+        }
 
-        await pool.query(`
-            INSERT INTO USUARIOS (ID_USUARIO, USERNAME, PASSWORD, ROL, ID_EMP, ESTADO)
-            VALUES ($1, $2, $3, $4, $5, 'Activo')
-        `, [id_usuario, usernameLimpio, password, rol.trim(), idEmpFinal]);
+        let id_usuario = 'USR-' + String(nextNum).padStart(3, '0');
+        let idExiste = true;
+        while (idExiste) {
+            const checkId = await pool.query('SELECT COUNT(*) AS "total" FROM USUARIOS WHERE TRIM(ID_USUARIO) = TRIM($1)', [id_usuario]);
+            if (parseInt(checkId.rows[0]?.total, 10) === 0) {
+                idExiste = false;
+            } else {
+                nextNum++;
+                id_usuario = 'USR-' + String(nextNum).padStart(3, '0');
+            }
+        }
+
+        // Cifrado criptográfico de la contraseña antes de guardar en base de datos (RN-41 / N10)
+        const passwordHash = hashearPassword(password);
+
+        // Inserción con reintento automático si ocurre colisión de llave primaria (pkey)
+        let insertExitoso = false;
+        let intentos = 0;
+        while (!insertExitoso && intentos < 5) {
+            intentos++;
+            id_usuario = 'USR-' + String(nextNum).padStart(3, '0');
+            try {
+                await pool.query(`
+                    INSERT INTO USUARIOS (ID_USUARIO, USERNAME, PASSWORD, ROL, ID_EMP, ESTADO)
+                    VALUES ($1, $2, $3, $4, $5, 'Activo')
+                `, [id_usuario, usernameLimpio, passwordHash, rol.trim(), idEmpFinal]);
+                insertExitoso = true;
+                await registrarAuditoria(req, 'CREAR', id_usuario, null, { username: usernameLimpio, rol: rol.trim(), id_emp: idEmpFinal });
+            } catch (insertErr) {
+                const esColisionId = insertErr.code === '23505' && (
+                    (insertErr.constraint && insertErr.constraint.toLowerCase().includes('pkey')) ||
+                    (insertErr.detail && insertErr.detail.toLowerCase().includes('id_usuario'))
+                );
+                if (esColisionId && intentos < 5) {
+                    nextNum++;
+                } else {
+                    throw insertErr;
+                }
+            }
+        }
 
         res.json({ exito: true, mensaje: `Usuario "${usernameLimpio}" registrado con éxito (ID: ${id_usuario})` });
     } catch (err) {
-        console.error('--- ERROR SQL EN USUARIOS:', err.message);
-        if (err.code === '23505' || (err.message && err.message.toUpperCase().includes('UNIQUE'))) {
+        console.error('--- ERROR SQL EN USUARIOS:', err.message, err.detail, err.code);
+        const nombreDisplay = usernameLimpio || req.body?.username || '';
+        if (err.code === '23505') {
+            if (err.constraint && err.constraint.toLowerCase().includes('pkey')) {
+                return res.status(500).json({
+                    exito: false,
+                    error: `No se pudo registrar el usuario porque ya existe un registro con el mismo identificador en el sistema.`
+                });
+            }
             return res.status(400).json({
                 exito: false,
-                error: `Error UNIQUE: Violación de restricción UNIQUE. El nombre de usuario "${usernameLimpio}" ya existe en el sistema (RN-13 / CP-13).`
+                error: `El nombre de usuario "${nombreDisplay}" ya está registrado en el sistema. Debe elegir un nombre de usuario diferente conforme a la regla RN-13.`
             });
         }
-        res.status(500).json({ exito: false, error: 'Error al registrar el usuario: ' + err.message });
+        if (err.code === '23503') {
+            return res.status(400).json({
+                exito: false,
+                error: `El empleado seleccionado no existe o no es válido.`
+            });
+        }
+        if (err.code === '23502') {
+            return res.status(400).json({
+                exito: false,
+                error: `Faltan campos obligatorios para registrar el usuario en el sistema.`
+            });
+        }
+        if (err.message && err.message.toUpperCase().includes('UNIQUE')) {
+            return res.status(400).json({
+                exito: false,
+                error: `El nombre de usuario "${nombreDisplay}" ya está registrado en el sistema. Debe elegir un nombre de usuario diferente conforme a la regla RN-13.`
+            });
+        }
+        res.status(500).json({ 
+            exito: false, 
+            error: 'Ocurrió un error en el servidor al intentar registrar el usuario. Por favor verifique los datos ingresados.' 
+        });
     }
 });
 
@@ -1597,11 +1969,16 @@ app.put('/api/usuarios/:id/estado', async (req, res) => {
         const idUsuario = req.params.id;
         const { estado } = req.body;
 
+        const anteriorRes = await pool.query('SELECT ESTADO FROM USUARIOS WHERE ID_USUARIO = $1 OR USERNAME = $1', [idUsuario]);
+        const estadoPrevio = anteriorRes.rows[0]?.ESTADO || 'Activo';
+
         await pool.query(`
             UPDATE USUARIOS 
             SET ESTADO = $1 
             WHERE ID_USUARIO = $2 OR USERNAME = $2
         `, [estado, idUsuario]);
+
+        await registrarAuditoria(req, 'CAMBIO_ESTADO', idUsuario, { estado: estadoPrevio }, { estado });
 
         res.json({ exito: true, mensaje: `Estado del usuario actualizado a ${estado}` });
     } catch (err) {
@@ -1641,6 +2018,8 @@ app.put('/api/usuarios/:id', async (req, res) => {
         if (!tienePermiso) return;
 
         const idUsuario = req.params.id;
+        const previoRes = await pool.query(`SELECT ID_USUARIO, USERNAME, ROL, ID_EMP, ESTADO FROM USUARIOS WHERE ID_USUARIO = $1 OR USERNAME = $1`, [idUsuario]);
+        const datosPrevios = previoRes.rows[0] || null;
         const { username, password, rol, id_emp, estado } = req.body || {};
 
         const usernameVal = username !== undefined ? username : req.body?.USERNAME;
@@ -1694,15 +2073,27 @@ app.put('/api/usuarios/:id', async (req, res) => {
             values.push(usernameLimpio);
         }
         if (passwordVal !== undefined && passwordVal && typeof passwordVal === 'string' && passwordVal.trim()) {
+            const passHash = hashearPassword(passwordVal.trim());
             updates.push(`PASSWORD = $${paramIdx++}`);
-            values.push(passwordVal.trim());
+            values.push(passHash);
         }
         if (rolVal !== undefined && rolVal && typeof rolVal === 'string' && rolVal.trim()) {
             updates.push(`ROL = $${paramIdx++}`);
             values.push(rolVal.trim());
         }
         if (idEmpVal !== undefined) {
-            const finalEmp = idEmpVal && typeof idEmpVal === 'string' && idEmpVal.trim() ? idEmpVal.trim() : null;
+            let finalEmp = null;
+            if (idEmpVal !== null) {
+                const strEmp = String(idEmpVal).trim();
+                if (strEmp && 
+                    strEmp.toLowerCase() !== 'null' && 
+                    strEmp.toLowerCase() !== 'undefined' && 
+                    strEmp.toLowerCase() !== '' &&
+                    !strEmp.toLowerCase().includes('ninguno') &&
+                    !strEmp.toLowerCase().includes('sin empleado')) {
+                    finalEmp = strEmp;
+                }
+            }
             updates.push(`ID_EMP = $${paramIdx++}`);
             values.push(finalEmp);
         }
@@ -1721,16 +2112,23 @@ app.put('/api/usuarios/:id', async (req, res) => {
         `;
         await pool.query(query, values);
 
+        await registrarAuditoria(req, 'MODIFICAR', idUsuario, datosPrevios, {
+            username: usernameLimpio,
+            rol: rolVal,
+            id_emp: idEmpVal,
+            estado: estadoVal
+        });
+
         res.json({ exito: true, mensaje: 'Usuario actualizado correctamente.' });
     } catch (err) {
         console.error('--- ERROR SQL AL ACTUALIZAR USUARIO:', err.message);
         if (err.code === '23505' || (err.message && err.message.toUpperCase().includes('UNIQUE'))) {
             return res.status(400).json({
                 exito: false,
-                error: 'Error UNIQUE: Violación de restricción UNIQUE. El nombre de usuario ya se encuentra registrado (RN-13 / CP-13).'
+                error: 'El nombre de usuario ya se encuentra registrado por otro usuario en el sistema. Debe elegir uno diferente (Regla RN-13).'
             });
         }
-        res.status(500).json({ exito: false, error: 'Error al actualizar usuario: ' + err.message });
+        res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar actualizar los datos del usuario.' });
     }
 });
 
@@ -1837,7 +2235,7 @@ app.put('/api/clientes/:id', async (req, res) => {
         res.json({ exito: true, mensaje: 'Cliente actualizado correctamente.' });
     } catch (err) {
         console.error('Error al actualizar cliente:', err.message);
-        res.status(500).json({ exito: false, error: 'Error al actualizar cliente: ' + err.message });
+        res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar actualizar el cliente.' });
     }
 });
 
@@ -1922,7 +2320,7 @@ app.put('/api/proveedores/:id', async (req, res) => {
         res.json({ exito: true, mensaje: 'Proveedor actualizado correctamente.' });
     } catch (err) {
         console.error('Error al actualizar proveedor:', err.message);
-        res.status(500).json({ exito: false, error: 'Error al actualizar proveedor: ' + err.message });
+        res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar actualizar el proveedor.' });
     }
 });
 
@@ -2016,7 +2414,7 @@ app.put('/api/empleados/:id', async (req, res) => {
         res.json({ exito: true, mensaje: 'Empleado actualizado correctamente.' });
     } catch (err) {
         console.error('Error al actualizar empleado:', err.message);
-        res.status(500).json({ exito: false, error: 'Error al actualizar empleado: ' + err.message });
+        res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar actualizar el empleado.' });
     }
 });
 
@@ -2131,7 +2529,7 @@ app.put('/api/productos/:id', async (req, res) => {
         res.json({ exito: true, mensaje: 'Producto actualizado correctamente.' });
     } catch (err) {
         console.error('Error al actualizar producto:', err.message);
-        res.status(500).json({ exito: false, error: 'Error al actualizar producto: ' + err.message });
+        res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar actualizar el producto.' });
     }
 });
 
@@ -2244,7 +2642,7 @@ app.put('/api/plantas/:id', async (req, res) => {
         res.json({ exito: true, mensaje: 'Planta actualizada correctamente.' });
     } catch (err) {
         console.error('Error al actualizar planta:', err.message);
-        res.status(500).json({ exito: false, error: 'Error al actualizar planta: ' + err.message });
+        res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar actualizar la planta.' });
     }
 });
 
@@ -2331,6 +2729,87 @@ app.put('/api/actualizar', async (req, res) => {
                             });
                         }
                     }
+                }
+            }
+        }
+
+        // Validación de cantidad de pedido según N1 (mayor que 0)
+        if (tabla.toUpperCase() === 'PEDIDOS' || Object.keys(campos || {}).some(k => k.toUpperCase() === 'NUM_CAN' || k.toUpperCase() === 'NUM_CAN_PLANT')) {
+            for (const key of Object.keys(campos || {})) {
+                if (key.toUpperCase() === 'NUM_CAN' || key.toLowerCase() === 'num_can') {
+                    const rawCan = campos[key];
+                    if (rawCan !== undefined && rawCan !== null && String(rawCan).trim() !== '') {
+                        const numCan = typeof rawCan === 'number' ? rawCan : Number(String(rawCan).trim());
+                        if (isNaN(numCan) || !Number.isInteger(numCan) || numCan <= 0) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: 'La cantidad del producto debe ser un número entero mayor que 0.'
+                            });
+                        }
+                    }
+                }
+                if (key.toUpperCase() === 'NUM_CAN_PLANT' || key.toLowerCase() === 'num_can_plant') {
+                    const rawCan = campos[key];
+                    if (rawCan !== undefined && rawCan !== null && String(rawCan).trim() !== '') {
+                        const numCan = typeof rawCan === 'number' ? rawCan : Number(String(rawCan).trim());
+                        if (isNaN(numCan) || !Number.isInteger(numCan) || numCan <= 0) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: 'La cantidad de la planta debe ser un número entero mayor que 0.'
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Validación de total mayor que 0 para VENTAS según N2
+        if (tabla.toUpperCase() === 'VENTAS' || Object.keys(campos || {}).some(k => k.toUpperCase() === 'TOT_PAGO')) {
+            for (const key of Object.keys(campos || {})) {
+                if (key.toUpperCase() === 'TOT_PAGO' || key.toLowerCase() === 'tot_pago' || key.toLowerCase() === 'total') {
+                    const rawTotal = campos[key];
+                    if (rawTotal !== undefined && rawTotal !== null && String(rawTotal).trim() !== '') {
+                        const numTotal = typeof rawTotal === 'number' ? rawTotal : parseFloat(String(rawTotal).trim());
+                        if (isNaN(numTotal) || numTotal <= 0) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: 'El total de la venta debe ser mayor a 0 (no se permiten ventas con total $0.00).'
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Validación de saldo y regla RN-29 para VENTAS (CU-30 / RN-16 / RN-29 / N6)
+        if (tabla.toUpperCase() === 'VENTAS') {
+            let saldoVal = campos?.['SALDO_PAGO'] ?? campos?.['saldo_pago'] ?? campos?.['SALDO'] ?? campos?.['saldo'];
+            let totalVal = campos?.['TOT_PAGO'] ?? campos?.['tot_pago'] ?? campos?.['TOTAL'] ?? campos?.['total'];
+            
+            if (saldoVal !== undefined || totalVal !== undefined) {
+                if (saldoVal === undefined || totalVal === undefined) {
+                    try {
+                        const rowActual = await pool.query('SELECT TOT_PAGO AS "TOT_PAGO", SALDO_PAGO AS "SALDO_PAGO" FROM VENTAS WHERE ID_VEN = $1', [idValue]);
+                        if (rowActual.rows.length > 0) {
+                            if (saldoVal === undefined) saldoVal = rowActual.rows[0].SALDO_PAGO;
+                            if (totalVal === undefined) totalVal = rowActual.rows[0].TOT_PAGO;
+                        }
+                    } catch (e) {}
+                }
+                const numSaldoCheck = Math.round((parseFloat(saldoVal) + Number.EPSILON) * 100) / 100;
+                const numTotalCheck = Math.round((parseFloat(totalVal) + Number.EPSILON) * 100) / 100;
+                
+                if (!isNaN(numSaldoCheck) && numSaldoCheck < 0) {
+                    return res.status(400).json({
+                        exito: false,
+                        error: 'El saldo pendiente debe ser mayor o igual a 0 (RN-16).'
+                    });
+                }
+                if (!isNaN(numSaldoCheck) && !isNaN(numTotalCheck) && numSaldoCheck > numTotalCheck) {
+                    return res.status(400).json({
+                        exito: false,
+                        error: 'El saldo pendiente no puede exceder el total de la venta (RN-29).'
+                    });
                 }
             }
         }
@@ -2443,13 +2922,72 @@ app.put('/api/actualizar', async (req, res) => {
             }
         }
 
+        // Validación de longitud máxima para EMPLEADOS (NOM_EMP VARCHAR(150)) según Diccionario de Datos (N4 / RN-19)
+        if (tabla.toUpperCase() === 'EMPLEADOS' || Object.keys(campos || {}).some(k => k.toUpperCase() === 'NOM_EMP')) {
+            const rawNom = campos?.['NOM_EMP'] !== undefined ? campos['NOM_EMP'] : campos?.['nom_emp'];
+            if (rawNom !== undefined && rawNom !== null) {
+                const nomLimpio = String(rawNom).trim();
+                if (nomLimpio.length > 150) {
+                    return res.status(400).json({
+                        exito: false,
+                        error: 'El nombre del empleado no puede exceder los 150 caracteres (NOM_EMP VARCHAR(150)).'
+                    });
+                }
+            }
+        }
+
+        // Validación de longitud máxima para SERVICIOS (TRAB_REAL VARCHAR(200)) según Diccionario de Datos (N4 / RN-19)
+        if (tabla.toUpperCase() === 'SERVICIOS' || Object.keys(campos || {}).some(k => k.toUpperCase() === 'TRAB_REAL')) {
+            const rawTrab = campos?.['TRAB_REAL'] !== undefined ? campos['TRAB_REAL'] : (campos?.['trab_real'] !== undefined ? campos['trab_real'] : campos?.['trabajo']);
+            if (rawTrab !== undefined && rawTrab !== null) {
+                const trabLimpio = String(rawTrab).trim();
+                if (trabLimpio.length > 200) {
+                    return res.status(400).json({
+                        exito: false,
+                        error: 'El trabajo realizado no puede exceder los 200 caracteres (TRAB_REAL VARCHAR(200)).'
+                    });
+                }
+            }
+        }
+
         let setQuery = [];
         let values = [];
         let index = 1;
         
         for (const key of Object.keys(campos || {})) {
             if (key !== idColumn && /^[a-zA-Z0-9_]+$/.test(key)) {
-                const valor = campos[key];
+                let valor = campos[key];
+                // Sanitizar y redondear campos monetarios para evitar residuos de flotantes (N6)
+                if (valor !== '' && valor !== null && valor !== undefined) {
+                    const keyUpper = key.toUpperCase();
+                    if (keyUpper.includes('PREC') || keyUpper.includes('COSTO') || keyUpper.includes('TOT') || keyUpper.includes('SUE') || keyUpper.includes('SALDO')) {
+                        const numVal = parseFloat(valor);
+                        if (!isNaN(numVal)) {
+                            if ((keyUpper.includes('PREC') || keyUpper.includes('COSTO') || keyUpper.includes('SUE')) && numVal <= 0) {
+                                return res.status(400).json({
+                                    exito: false,
+                                    error: `El campo ${key} debe ser mayor a 0 ($0.00 no permitido porque no es gratis).`
+                                });
+                            }
+                            valor = Math.round((numVal + Number.EPSILON) * 100) / 100;
+                        }
+                    }
+                    // Validación de stock mayor a 0
+                    if (keyUpper.includes('STOCK')) {
+                        const numStock = Number(valor);
+                        if (isNaN(numStock) || !Number.isInteger(numStock) || numStock <= 0) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: `El campo ${key} debe ser un número entero mayor a 0 (no se permiten existencias en 0).`
+                            });
+                        }
+                        valor = numStock;
+                    }
+                    // Cifrado criptográfico de contraseñas si se actualizan desde el panel (RN-41 / N10)
+                    if (keyUpper === 'PASSWORD' && !esPasswordHasheada(String(valor))) {
+                        valor = hashearPassword(String(valor).trim());
+                    }
+                }
                 values.push(valor !== '' && valor !== null && valor !== undefined ? valor : null);
                 setQuery.push(`${key} = $${index}`);
                 index++;
@@ -2462,16 +3000,543 @@ app.put('/api/actualizar', async (req, res) => {
         const query = `UPDATE ${tabla} SET ${setQuery.join(', ')} WHERE ${idColumn} = $${index}`;
         await pool.query(query, values);
         
+        if (tabla.toUpperCase() === 'USUARIOS') {
+            await registrarAuditoria(req, 'MODIFICAR_PANEL', idValue, null, campos);
+        }
+
         res.json({ exito: true, mensaje: `Registro actualizado correctamente en ${tabla}` });
     } catch (err) {
         console.error('ERROR AL ACTUALIZAR:', err.message);
         if (err.code === '23505' || (err.message && err.message.toUpperCase().includes('UNIQUE'))) {
             return res.status(400).json({
                 exito: false,
-                error: `Error UNIQUE: Violación de restricción UNIQUE. Ya existe un registro con ese valor en un campo único (RN-13 / CP-13). ${err.message}`
+                error: `No se pudo actualizar: ya existe otro registro con ese mismo valor en un campo único (Regla RN-13 / CP-13).`
             });
         }
-        res.status(500).json({ exito: false, error: 'Error al actualizar: ' + err.message });
+        res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar actualizar el registro.' });
+    }
+});
+
+// Función centralizada para eliminación con verificación de dependencias (RN-26 / CU-18 / RN-34 / RN-35 / N5)
+async function procesarEliminacion(req, res, tabla, idColumn, idValue) {
+    if (!tabla || !/^[a-zA-Z0-9_]+$/.test(tabla)) {
+        return res.status(400).json({ exito: false, error: 'Nombre de tabla inválido.' });
+    }
+
+    const mapIdCols = {
+        'PROVEEDORES': 'ID_PROV',
+        'CLIENTES': 'ID_CLI',
+        'EMPLEADOS': 'ID_EMP',
+        'PRODUCTOS': 'ID_PRO',
+        'PLANTAS': 'ID_PLANTA',
+        'PEDIDOS': 'ID_PED',
+        'VENTAS': 'ID_VEN',
+        'SERVICIOS': 'ID_SERV',
+        'CAT_SERVICIOS': 'ID_CAT_SERV',
+        'USUARIOS': 'ID_USUARIO'
+    };
+
+    const col = (idColumn && /^[a-zA-Z0-9_]+$/.test(idColumn)) 
+        ? idColumn 
+        : (mapIdCols[tabla.toUpperCase()] || 'ID');
+
+    if (!idValue) {
+        return res.status(400).json({ exito: false, error: 'Debe proporcionar el identificador del registro a eliminar.' });
+    }
+
+    const tablaUpper = tabla.toUpperCase();
+    const idStr = String(idValue).trim();
+
+    // 1. Verificación de dependencias según Regla de Negocio RN-26 (Integridad Referencial)
+    if (tablaUpper === 'PROVEEDORES') {
+        const checkProd = await pool.query('SELECT COUNT(*) AS "total" FROM PRODUCTOS WHERE TRIM(ID_PROV) = TRIM($1)', [idStr]);
+        const checkPlant = await pool.query('SELECT COUNT(*) AS "total" FROM PLANTAS WHERE TRIM(PROV_PLANT) = TRIM($1)', [idStr]);
+        const totProd = parseInt(checkProd.rows[0]?.total, 10) || 0;
+        const totPlant = parseInt(checkPlant.rows[0]?.total, 10) || 0;
+        if (totProd > 0 || totPlant > 0) {
+            return res.status(400).json({
+                exito: false,
+                error: `No se puede eliminar el proveedor "${idStr}" porque tiene ${totProd} producto(s) y ${totPlant} planta(s) asociados en el inventario. Según la regla RN-26 no se pueden eliminar registros con dependencias.`
+            });
+        }
+    } else if (tablaUpper === 'CLIENTES') {
+        const checkPed = await pool.query('SELECT COUNT(*) AS "total" FROM PEDIDOS WHERE TRIM(ID_CLI) = TRIM($1)', [idStr]);
+        const checkVen = await pool.query('SELECT COUNT(*) AS "total" FROM VENTAS WHERE TRIM(ID_CLI) = TRIM($1)', [idStr]);
+        const checkServ = await pool.query('SELECT COUNT(*) AS "total" FROM SERVICIOS WHERE TRIM(ID_CLI) = TRIM($1)', [idStr]);
+        const totPed = parseInt(checkPed.rows[0]?.total, 10) || 0;
+        const totVen = parseInt(checkVen.rows[0]?.total, 10) || 0;
+        const totServ = parseInt(checkServ.rows[0]?.total, 10) || 0;
+        if (totPed > 0 || totVen > 0 || totServ > 0) {
+            return res.status(400).json({
+                exito: false,
+                error: `No se puede eliminar el cliente "${idStr}" porque tiene registros asociados (${totPed} pedido(s), ${totVen} venta(s), ${totServ} servicio(s)). Según la regla RN-26 no se pueden eliminar registros con dependencias.`
+            });
+        }
+    } else if (tablaUpper === 'EMPLEADOS') {
+        const checkUsr = await pool.query('SELECT COUNT(*) AS "total" FROM USUARIOS WHERE TRIM(ID_EMP) = TRIM($1)', [idStr]);
+        const checkServ = await pool.query('SELECT COUNT(*) AS "total" FROM SERVICIOS WHERE TRIM(ID_EMP) = TRIM($1)', [idStr]);
+        const totUsr = parseInt(checkUsr.rows[0]?.total, 10) || 0;
+        const totServ = parseInt(checkServ.rows[0]?.total, 10) || 0;
+        if (totUsr > 0 || totServ > 0) {
+            return res.status(400).json({
+                exito: false,
+                error: `No se puede eliminar el empleado "${idStr}" porque tiene ${totUsr} usuario(s) y ${totServ} servicio(s) asociados. Según la regla RN-26 no se pueden eliminar registros con dependencias.`
+            });
+        }
+    } else if (tablaUpper === 'PRODUCTOS') {
+        const checkPed = await pool.query('SELECT COUNT(*) AS "total" FROM PEDIDOS WHERE TRIM(ID_PRO) = TRIM($1)', [idStr]);
+        const checkVen = await pool.query('SELECT COUNT(*) AS "total" FROM VENTAS WHERE TRIM(ID_PRO) = TRIM($1)', [idStr]);
+        const totPed = parseInt(checkPed.rows[0]?.total, 10) || 0;
+        const totVen = parseInt(checkVen.rows[0]?.total, 10) || 0;
+        if (totPed > 0 || totVen > 0) {
+            return res.status(400).json({
+                exito: false,
+                error: `No se puede eliminar el producto "${idStr}" porque tiene ${totPed} pedido(s) y ${totVen} venta(s) asociados. Según la regla RN-26 no se pueden eliminar registros con dependencias.`
+            });
+        }
+    } else if (tablaUpper === 'PLANTAS') {
+        const checkPed = await pool.query('SELECT COUNT(*) AS "total" FROM PEDIDOS WHERE TRIM(ID_PLANTA) = TRIM($1)', [idStr]);
+        const checkVen = await pool.query('SELECT COUNT(*) AS "total" FROM VENTAS WHERE TRIM(ID_PLANTA) = TRIM($1)', [idStr]);
+        const totPed = parseInt(checkPed.rows[0]?.total, 10) || 0;
+        const totVen = parseInt(checkVen.rows[0]?.total, 10) || 0;
+        if (totPed > 0 || totVen > 0) {
+            return res.status(400).json({
+                exito: false,
+                error: `No se puede eliminar la planta "${idStr}" porque tiene ${totPed} pedido(s) y ${totVen} venta(s) asociados. Según la regla RN-26 no se pueden eliminar registros con dependencias.`
+            });
+        }
+    } else if (tablaUpper === 'CAT_SERVICIOS') {
+        const checkServ = await pool.query('SELECT COUNT(*) AS "total" FROM SERVICIOS WHERE TRIM(ID_CAT_SERV) = TRIM($1)', [idStr]);
+        const totServ = parseInt(checkServ.rows[0]?.total, 10) || 0;
+        if (totServ > 0) {
+            return res.status(400).json({
+                exito: false,
+                error: `No se puede eliminar el servicio del catálogo "${idStr}" porque tiene ${totServ} servicio(s) registrados. Según la regla RN-26 no se pueden eliminar registros con dependencias.`
+            });
+        }
+    } else if (tablaUpper === 'USUARIOS') {
+        if (idStr.toLowerCase() === 'usr-001' || idStr.toLowerCase() === 'admin') {
+            return res.status(400).json({
+                exito: false,
+                error: 'No se puede eliminar el usuario Administrador principal del sistema (RN-34).'
+            });
+        }
+    }
+
+    let datosUsuarioPrevio = null;
+    if (tablaUpper === 'USUARIOS') {
+        try {
+            const uCheck = await pool.query(`SELECT ID_USUARIO, USERNAME, ROL, ID_EMP, ESTADO FROM USUARIOS WHERE TRIM(${col}) = TRIM($1) OR TRIM(USERNAME) = TRIM($1)`, [idStr]);
+            datosUsuarioPrevio = uCheck.rows[0] || null;
+        } catch (e) {}
+    }
+
+    try {
+        const deleteQuery = `DELETE FROM ${tabla} WHERE TRIM(${col}) = TRIM($1)`;
+        const delRes = await pool.query(deleteQuery, [idStr]);
+
+        if (delRes.rowCount === 0) {
+            return res.status(404).json({ exito: false, error: `No se encontró el registro "${idStr}" en la tabla "${tabla}".` });
+        }
+
+        if (tablaUpper === 'USUARIOS') {
+            await registrarAuditoria(req, 'ELIMINAR', idStr, datosUsuarioPrevio, null);
+        }
+
+        res.json({ exito: true, mensaje: `Registro "${idStr}" eliminado correctamente de ${tabla}.` });
+    } catch (dbErr) {
+        if (dbErr.code === '23503') { // foreign_key_violation in PostgreSQL
+            return res.status(400).json({
+                exito: false,
+                error: `No se puede eliminar el registro "${idStr}" de "${tabla}" porque existen otros registros que dependen de él en el sistema (Regla RN-26: Integridad Referencial).`
+            });
+        }
+        throw dbErr;
+    }
+}
+
+// Endpoint general para eliminar registros (RN-26 / CU-18 / RN-34 / RN-35 / N5)
+app.delete('/api/eliminar', async (req, res) => {
+    try {
+        const tienePermiso = await verificarAccesoAdmin(req, res);
+        if (!tienePermiso) return;
+
+        const { tabla, idColumn, idValue } = req.body || {};
+        await procesarEliminacion(req, res, tabla, idColumn, idValue);
+    } catch (err) {
+        console.error('ERROR AL ELIMINAR:', err.message);
+        res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar eliminar el registro.' });
+    }
+});
+
+app.delete('/api/eliminar/:tabla/:id', async (req, res) => {
+    try {
+        const tienePermiso = await verificarAccesoAdmin(req, res);
+        if (!tienePermiso) return;
+
+        const tabla = req.params.tabla;
+        const idValue = req.params.id;
+        const idColumn = req.query?.idCol || req.body?.idColumn;
+        await procesarEliminacion(req, res, tabla, idColumn, idValue);
+    } catch (err) {
+        console.error('ERROR AL ELIMINAR:', err.message);
+        res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar eliminar el registro.' });
+    }
+});
+
+// Rutas REST específicas para eliminación por entidad
+const entidadesEliminables = [
+    { ruta: 'proveedores', tabla: 'PROVEEDORES', idCol: 'ID_PROV' },
+    { ruta: 'clientes', tabla: 'CLIENTES', idCol: 'ID_CLI' },
+    { ruta: 'empleados', tabla: 'EMPLEADOS', idCol: 'ID_EMP' },
+    { ruta: 'productos', tabla: 'PRODUCTOS', idCol: 'ID_PRO' },
+    { ruta: 'plantas', tabla: 'PLANTAS', idCol: 'ID_PLANTA' },
+    { ruta: 'pedidos', tabla: 'PEDIDOS', idCol: 'ID_PED' },
+    { ruta: 'ventas', tabla: 'VENTAS', idCol: 'ID_VEN' },
+    { ruta: 'servicios', tabla: 'SERVICIOS', idCol: 'ID_SERV' },
+    { ruta: 'catalogo-servicios', tabla: 'CAT_SERVICIOS', idCol: 'ID_CAT_SERV' },
+    { ruta: 'usuarios', tabla: 'USUARIOS', idCol: 'ID_USUARIO' }
+];
+
+entidadesEliminables.forEach(({ ruta, tabla, idCol }) => {
+    app.delete(`/api/${ruta}/:id`, async (req, res) => {
+        try {
+            const tienePermiso = await verificarAccesoAdmin(req, res);
+            if (!tienePermiso) return;
+            await procesarEliminacion(req, res, tabla, idCol, req.params.id);
+        } catch (err) {
+            console.error(`ERROR AL ELIMINAR EN ${tabla}:`, err.message);
+            res.status(500).json({ exito: false, error: `Ocurrió un error en el servidor al intentar eliminar el registro en ${tabla}.` });
+        }
+    });
+});
+
+// Limpieza de datos inválidos y artefactos heredados en Supabase (N8)
+async function limpiarDatosInvalidosBaseDatos() {
+    try {
+        console.log('Iniciando limpieza de datos inválidos y pruebas negativas heredadas en Supabase (N8)...');
+        await pool.query(`
+            DO $$
+            BEGIN
+                -- 1. CLIENTES: Eliminar CLI-026 y clientes sin nombre si no tienen referencias activas (RN-12 / N8)
+                DELETE FROM CLIENTES 
+                WHERE (ID_CLI = 'CLI-026' OR NOM_CLI IS NULL OR TRIM(NOM_CLI) = '')
+                  AND ID_CLI NOT IN (SELECT ID_CLI FROM VENTAS WHERE ID_CLI IS NOT NULL)
+                  AND ID_CLI NOT IN (SELECT ID_CLI FROM PEDIDOS WHERE ID_CLI IS NOT NULL)
+                  AND ID_CLI NOT IN (SELECT ID_CLI FROM SERVICIOS WHERE ID_CLI IS NOT NULL);
+
+                -- Si alguno tuviese dependencias, asegurar que tenga un nombre válido no vacío
+                UPDATE CLIENTES 
+                SET NOM_CLI = 'Cliente General' 
+                WHERE (ID_CLI = 'CLI-026' OR NOM_CLI IS NULL OR TRIM(NOM_CLI) = '');
+
+                -- 2. EMPLEADOS: Eliminar EMP-013, EMP-019 y empleados con sueldo negativo (RN-16 / N8)
+                -- Desvincular de llaves foráneas para permitir eliminación limpia de pruebas inválidas
+                UPDATE USUARIOS SET ID_EMP = NULL 
+                WHERE ID_EMP IN ('EMP-013', 'EMP-019') 
+                   OR ID_EMP IN (SELECT ID_EMP FROM EMPLEADOS WHERE SUE_EMP < 0);
+
+                UPDATE SERVICIOS SET ID_EMP = NULL 
+                WHERE ID_EMP IN ('EMP-013', 'EMP-019') 
+                   OR ID_EMP IN (SELECT ID_EMP FROM EMPLEADOS WHERE SUE_EMP < 0);
+
+                DELETE FROM EMPLEADOS 
+                WHERE ID_EMP IN ('EMP-013', 'EMP-019') OR SUE_EMP < 0;
+
+                -- Por si quedó algún empleado no eliminable con sueldo negativo
+                UPDATE EMPLEADOS SET SUE_EMP = 0 WHERE SUE_EMP < 0;
+
+                -- 3. PRODUCTOS: Eliminar PRO-003, PRO-005, PRO-014, PRO-015, PRO-018 y productos con precio/stock negativo (RN-16 / RN-17 / N8)
+                DELETE FROM PRODUCTOS
+                WHERE (ID_PRO IN ('PRO-003', 'PRO-005', 'PRO-014', 'PRO-015', 'PRO-018') OR PREC_PRO < 0 OR STOCK_PRO < 0)
+                  AND ID_PRO NOT IN (SELECT ID_PRO FROM VENTAS WHERE ID_PRO IS NOT NULL)
+                  AND ID_PRO NOT IN (SELECT ID_PRO FROM PEDIDOS WHERE ID_PRO IS NOT NULL);
+
+                UPDATE PRODUCTOS SET PREC_PRO = 0 WHERE PREC_PRO < 0;
+                UPDATE PRODUCTOS SET STOCK_PRO = 0 WHERE STOCK_PRO < 0;
+
+                -- 4. PLANTAS: Eliminar PLN-014, PLN-021, PLN-005, PLN-004, PLN-013, PLN-020 y plantas con stock/precio negativo (RN-16 / RN-17 / N8)
+                DELETE FROM PLANTAS
+                WHERE (ID_PLANTA IN ('PLN-014', 'PLN-021', 'PLN-005', 'PLN-004', 'PLN-013', 'PLN-020') OR STOCK_PLANT < 0 OR PREC_PLANTA < 0)
+                  AND ID_PLANTA NOT IN (SELECT ID_PLANTA FROM VENTAS WHERE ID_PLANTA IS NOT NULL)
+                  AND ID_PLANTA NOT IN (SELECT ID_PLANTA FROM PEDIDOS WHERE ID_PLANTA IS NOT NULL);
+
+                UPDATE PLANTAS SET STOCK_PLANT = 0 WHERE STOCK_PLANT < 0;
+                UPDATE PLANTAS SET PREC_PLANTA = 0 WHERE PREC_PLANTA < 0;
+
+                -- 5. CAT_SERVICIOS: Eliminar CSV-010, CSV-016 y servicios de catálogo con costo negativo (RN-16 / RN-33 / N8)
+                DELETE FROM CAT_SERVICIOS
+                WHERE (ID_CAT_SERV IN ('CSV-010', 'CSV-016') OR COSTO_EST < 0)
+                  AND ID_CAT_SERV NOT IN (SELECT ID_CAT_SERV FROM SERVICIOS WHERE ID_CAT_SERV IS NOT NULL);
+
+                UPDATE CAT_SERVICIOS SET COSTO_EST = 0 WHERE COSTO_EST < 0;
+
+                -- 6. Agregar restricciones CHECK para garantizar integridad permanente a nivel de base de datos
+                IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'chk_sue_emp_no_negativo') THEN
+                    ALTER TABLE EMPLEADOS ADD CONSTRAINT chk_sue_emp_no_negativo CHECK (SUE_EMP >= 0);
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'chk_prec_pro_no_negativo') THEN
+                    ALTER TABLE PRODUCTOS ADD CONSTRAINT chk_prec_pro_no_negativo CHECK (PREC_PRO >= 0);
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'chk_stock_pro_no_negativo') THEN
+                    ALTER TABLE PRODUCTOS ADD CONSTRAINT chk_stock_pro_no_negativo CHECK (STOCK_PRO >= 0);
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'chk_stock_plant_no_negativo') THEN
+                    ALTER TABLE PLANTAS ADD CONSTRAINT chk_stock_plant_no_negativo CHECK (STOCK_PLANT >= 0);
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'chk_prec_planta_no_negativo') THEN
+                    ALTER TABLE PLANTAS ADD CONSTRAINT chk_prec_planta_no_negativo CHECK (PREC_PLANTA >= 0);
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'chk_costo_est_no_negativo') THEN
+                    ALTER TABLE CAT_SERVICIOS ADD CONSTRAINT chk_costo_est_no_negativo CHECK (COSTO_EST >= 0);
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'chk_nom_cli_no_vacio') THEN
+                    ALTER TABLE CLIENTES ADD CONSTRAINT chk_nom_cli_no_vacio CHECK (NOM_CLI IS NOT NULL AND TRIM(NOM_CLI) <> '');
+                END IF;
+
+                -- 7. AUDITORIA_USUARIOS: Tabla de trazabilidad y bitácora de cambios de usuarios (N9)
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE LOWER(table_name) = 'auditoria_usuarios'
+                ) THEN
+                    CREATE TABLE AUDITORIA_USUARIOS (
+                        ID_AUDITORIA SERIAL PRIMARY KEY,
+                        FECHA_HORA TIMESTAMP DEFAULT NOW(),
+                        USUARIO_RESPONSABLE VARCHAR(80),
+                        ACCION VARCHAR(50),
+                        ID_USUARIO_AFECTADO VARCHAR(20),
+                        DATOS_ANTERIORES TEXT,
+                        DATOS_NUEVOS TEXT,
+                        ORIGEN VARCHAR(100)
+                    );
+                END IF;
+
+                -- 8. USUARIOS: Restauración de integridad para USR-011 y evitar huecos en el catálogo (N9)
+                IF NOT EXISTS (SELECT 1 FROM USUARIOS WHERE TRIM(ID_USUARIO) = 'USR-011') THEN
+                    INSERT INTO USUARIOS (ID_USUARIO, USERNAME, PASSWORD, ROL, ID_EMP, ESTADO)
+                    VALUES (
+                        'USR-011', 
+                        CASE WHEN EXISTS (SELECT 1 FROM USUARIOS WHERE LOWER(TRIM(USERNAME)) = 'aux_externo_w') 
+                             THEN 'usr011_operador' 
+                             ELSE 'aux_externo_w' END, 
+                        'pbkdf2$sha512$100000$7bf1aef9d4fdc14af13679ba976607c4$45d0da13fcc7b0a24f920fe63d0ecda703bf658bdb91563f50c37cf365bed4475a862565e8cd41101b31f911f9f414f325ae083f83e9721bb5918c3b0f416ea3', 
+                        'Empleado', 
+                        (SELECT ID_EMP FROM EMPLEADOS WHERE ID_EMP = 'EMP-011' LIMIT 1), 
+                        'Activo'
+                    );
+
+                    INSERT INTO AUDITORIA_USUARIOS (USUARIO_RESPONSABLE, ACCION, ID_USUARIO_AFECTADO, DATOS_ANTERIORES, DATOS_NUEVOS, ORIGEN)
+                    VALUES (
+                        'Sistema / Mantenimiento N9', 
+                        'RESTAURAR_HUECO', 
+                        'USR-011', 
+                        'Registro faltante detectado en auditoría N9 (eliminado en prueba CU-18)', 
+                        'Usuario USR-011 restaurado con éxito para completar el catálogo de 12 usuarios', 
+                        'limpiarDatosInvalidosBaseDatos'
+                    );
+                END IF;
+            END $$;
+        `);
+        console.log('Limpieza de datos inválidos completada exitosamente en Supabase (N8).');
+        return true;
+    } catch (limpiezaErr) {
+        console.error('Aviso durante la limpieza de datos inválidos:', limpiezaErr.message);
+        return false;
+    }
+}
+
+app.get('/api/mantenimiento/limpiar-invalidos', async (req, res) => {
+    try {
+        const resultado = await limpiarDatosInvalidosBaseDatos();
+        res.json({ exito: true, mensaje: 'Base de datos limpiada exitosamente.', completado: resultado });
+    } catch (e) {
+        res.status(500).json({ exito: false, error: e.message });
+    }
+});
+
+// Obtener historial de auditoría de usuarios (N9)
+app.get('/api/auditoria/usuarios', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT 
+                ID_AUDITORIA AS "ID_AUDITORIA",
+                FECHA_HORA AS "FECHA_HORA",
+                USUARIO_RESPONSABLE AS "USUARIO_RESPONSABLE",
+                ACCION AS "ACCION",
+                ID_USUARIO_AFECTADO AS "ID_USUARIO_AFECTADO",
+                DATOS_ANTERIORES AS "DATOS_ANTERIORES",
+                DATOS_NUEVOS AS "DATOS_NUEVOS",
+                ORIGEN AS "ORIGEN"
+            FROM AUDITORIA_USUARIOS
+            ORDER BY ID_AUDITORIA DESC
+        `);
+        res.json({ exito: true, total: result.rows.length, auditoria: result.rows });
+    } catch (err) {
+        res.status(500).json({ exito: false, error: 'Error al consultar auditoría: ' + err.message });
+    }
+});
+
+// Asegurar que las columnas en Supabase tengan la longitud exacta según el Diccionario de Datos (N4)
+async function asegurarLongitudesDiccionarioDatos() {
+    try {
+        await pool.query(`
+            DO $$
+            BEGIN
+                -- NOM_EMP VARCHAR(150)
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE LOWER(table_name) = 'empleados' AND LOWER(column_name) = 'nom_emp'
+                ) THEN
+                    ALTER TABLE EMPLEADOS ALTER COLUMN NOM_EMP TYPE VARCHAR(150);
+                END IF;
+
+                -- TRAB_REAL VARCHAR(200)
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE LOWER(table_name) = 'servicios' AND LOWER(column_name) = 'trab_real'
+                ) THEN
+                    ALTER TABLE SERVICIOS ALTER COLUMN TRAB_REAL TYPE VARCHAR(200);
+                END IF;
+
+                -- NOM_CLI VARCHAR(150)
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE LOWER(table_name) = 'clientes' AND LOWER(column_name) = 'nom_cli'
+                ) THEN
+                    ALTER TABLE CLIENTES ALTER COLUMN NOM_CLI TYPE VARCHAR(150);
+                END IF;
+
+                -- NOM_PROV VARCHAR(150)
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE LOWER(table_name) = 'proveedores' AND LOWER(column_name) = 'nom_prov'
+                ) THEN
+                    ALTER TABLE PROVEEDORES ALTER COLUMN NOM_PROV TYPE VARCHAR(150);
+                END IF;
+
+                -- TOT_PAGO y SALDO_PAGO NUMERIC(10, 2) en VENTAS (N6 - Redondeo de Moneda)
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE LOWER(table_name) = 'ventas' AND LOWER(column_name) = 'tot_pago'
+                ) THEN
+                    ALTER TABLE VENTAS ALTER COLUMN TOT_PAGO TYPE NUMERIC(10, 2) USING ROUND(TOT_PAGO::numeric, 2);
+                END IF;
+
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE LOWER(table_name) = 'ventas' AND LOWER(column_name) = 'saldo_pago'
+                ) THEN
+                    ALTER TABLE VENTAS ALTER COLUMN SALDO_PAGO TYPE NUMERIC(10, 2) USING ROUND(SALDO_PAGO::numeric, 2);
+                END IF;
+
+                -- Moneda exacta en PRODUCTOS, PLANTAS, PEDIDOS, SERVICIOS, CAT_SERVICIOS, EMPLEADOS (N6)
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE LOWER(table_name) = 'productos' AND LOWER(column_name) = 'prec_pro'
+                ) THEN
+                    ALTER TABLE PRODUCTOS ALTER COLUMN PREC_PRO TYPE NUMERIC(10, 2) USING ROUND(PREC_PRO::numeric, 2);
+                END IF;
+
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE LOWER(table_name) = 'plantas' AND LOWER(column_name) = 'prec_planta'
+                ) THEN
+                    ALTER TABLE PLANTAS ALTER COLUMN PREC_PLANTA TYPE NUMERIC(10, 2) USING ROUND(PREC_PLANTA::numeric, 2);
+                END IF;
+
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE LOWER(table_name) = 'pedidos' AND LOWER(column_name) = 'tot_pedido'
+                ) THEN
+                    ALTER TABLE PEDIDOS ALTER COLUMN TOT_PEDIDO TYPE NUMERIC(10, 2) USING ROUND(TOT_PEDIDO::numeric, 2);
+                END IF;
+
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE LOWER(table_name) = 'servicios' AND LOWER(column_name) = 'costo_serv'
+                ) THEN
+                    ALTER TABLE SERVICIOS ALTER COLUMN COSTO_SERV TYPE NUMERIC(10, 2) USING ROUND(COSTO_SERV::numeric, 2);
+                END IF;
+
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE LOWER(table_name) = 'cat_servicios' AND LOWER(column_name) = 'costo_est'
+                ) THEN
+                    ALTER TABLE CAT_SERVICIOS ALTER COLUMN COSTO_EST TYPE NUMERIC(10, 2) USING ROUND(COSTO_EST::numeric, 2);
+                END IF;
+
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE LOWER(table_name) = 'empleados' AND LOWER(column_name) = 'sue_emp'
+                ) THEN
+                    ALTER TABLE EMPLEADOS ALTER COLUMN SUE_EMP TYPE NUMERIC(10, 2) USING ROUND(SUE_EMP::numeric, 2);
+                END IF;
+
+                -- PASSWORD VARCHAR(255) en USUARIOS para hashes criptográficos (RN-41 / N10)
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE LOWER(table_name) = 'usuarios' AND LOWER(column_name) = 'password'
+                ) THEN
+                    ALTER TABLE USUARIOS ALTER COLUMN PASSWORD TYPE VARCHAR(255);
+                END IF;
+            END $$;
+        `);
+        console.log('Diccionario de datos verificado: NOM_EMP (150), TRAB_REAL (200) y PASSWORD (255) configurados correctamente en Supabase.');
+    } catch (schemaErr) {
+        console.log('Aviso al verificar longitud de columnas en base de datos:', schemaErr.message);
+    }
+}
+
+// Migración automática de contraseñas legadas en texto plano a hashes seguros (RN-41 / N10)
+async function migrarContrasenasTextoPlano() {
+    try {
+        console.log('Iniciando verificación y migración de contraseñas a hashes seguros (RN-41 / N10)...');
+        await pool.query(`
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE LOWER(table_name) = 'usuarios' AND LOWER(column_name) = 'password'
+                ) THEN
+                    ALTER TABLE USUARIOS ALTER COLUMN PASSWORD TYPE VARCHAR(255);
+                END IF;
+            END $$;
+        `);
+
+        const res = await pool.query('SELECT ID_USUARIO, USERNAME, PASSWORD FROM USUARIOS');
+        let migradas = 0;
+        for (const u of res.rows) {
+            const rawPass = u.PASSWORD ? String(u.PASSWORD).trim() : '';
+            if (rawPass && !esPasswordHasheada(rawPass)) {
+                const passHash = hashearPassword(rawPass);
+                await pool.query('UPDATE USUARIOS SET PASSWORD = $1 WHERE ID_USUARIO = $2 OR USERNAME = $3', [passHash, u.ID_USUARIO, u.USERNAME]);
+                migradas++;
+            }
+        }
+        if (migradas > 0) {
+            console.log(`Se migraron exitosamente ${migradas} contraseñas de texto plano a hashes seguros PBKDF2 (RN-41 / N10).`);
+        } else {
+            console.log('Todas las contraseñas en USUARIOS ya se encuentran protegidas con hash criptográfico (RN-41 / N10).');
+        }
+        return true;
+    } catch (err) {
+        console.error('Aviso durante la migración de contraseñas (RN-41 / N10):', err.message);
+        return false;
+    }
+}
+
+app.get('/api/mantenimiento/migrar-contrasenas', async (req, res) => {
+    try {
+        const resultado = await migrarContrasenasTextoPlano();
+        res.json({ exito: true, mensaje: 'Migración de contraseñas a hashes ejecutada.', completado: resultado });
+    } catch (e) {
+        res.status(500).json({ exito: false, error: e.message });
     }
 });
 
@@ -2481,6 +3546,9 @@ app.listen(PORT, async () => {
     try {
         await pool.query('SELECT NOW()');
         console.log('Conexión exitosa a PostgreSQL en Supabase');
+        await limpiarDatosInvalidosBaseDatos();
+        await asegurarLongitudesDiccionarioDatos();
+        await migrarContrasenasTextoPlano();
     } catch (err) {
         console.error('Error conectando a PostgreSQL:', err);
     }

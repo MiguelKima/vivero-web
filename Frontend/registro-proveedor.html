@@ -78,7 +78,31 @@
                     <input type="text" id="pro_prov" placeholder="Ej. Plantas y macetas">
                 </div>
                 <button type="submit">Registrar Proveedor</button>
+                <div style="text-align: center; margin-top: 15px;">
+                    <a href="dashboard.html" style="display: inline-block; background-color: var(--primary-color); color: white; padding: 8px 16px; border-radius: 4px; text-decoration: none; font-size: 13px; font-weight: bold;">Ver Panel Principal</a>
+                </div>
             </form>
+        </div>
+
+        <!-- Tabla de Proveedores Registrados con opción de Eliminación (RN-26 / N5) -->
+        <div class="card" style="max-width: 900px; margin: 30px auto;">
+            <h2>Proveedores Registrados</h2>
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; margin-top: 10px;" id="tablaProveedores">
+                    <thead>
+                        <tr style="background-color: var(--secondary-color); color: white; text-align: left;">
+                            <th style="padding: 8px;">ID</th>
+                            <th style="padding: 8px;">Nombre</th>
+                            <th style="padding: 8px;">RFC</th>
+                            <th style="padding: 8px;">Contacto</th>
+                            <th style="padding: 8px;">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbodyProveedores">
+                        <tr><td colspan="5" style="padding: 10px; text-align: center;">Cargando proveedores...</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 
@@ -87,6 +111,18 @@
             <h3 id="tituloModal">Aviso del Sistema</h3>
             <p id="textoModal">Mensaje informativo.</p>
             <button onclick="cerrarModal()">Aceptar</button>
+        </div>
+    </div>
+
+    <!-- MODAL DE CONFIRMACIÓN DEL SISTEMA (CU-11 / CU-12 / CU-47 / RN-26) -->
+    <div id="modalConfirmar" class="custom-modal">
+        <div class="custom-modal-content" style="max-width: 420px; text-align: center;">
+            <h3 id="tituloConfirmar" style="color: #c0392b; margin-top: 0;">Confirmar Eliminación</h3>
+            <div id="textoConfirmar" style="font-size: 14px; margin: 15px 0 25px 0; text-align: left; line-height: 1.5; color: var(--text-color);"></div>
+            <div style="display: flex; gap: 10px; justify-content: center;">
+                <button type="button" id="btnConfirmarSi" style="background-color: #dc3545; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; flex: 1;">Sí, Eliminar</button>
+                <button type="button" onclick="cerrarModalConfirmar()" style="background-color: #6c757d; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; flex: 1;">Cancelar</button>
+            </div>
         </div>
     </div>
 
@@ -123,15 +159,136 @@
                     document.getElementById('textoModal').innerText = data.error;
                 }
                 document.getElementById('modalMensaje').style.display = 'flex';
-            }).catch(err => alert("Error de comunicación."));
+            }).catch(err => {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Error de Conexión";
+                document.getElementById('textoModal').innerText = "Error de comunicación con el servidor al intentar registrar el proveedor.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+            });
+        }
+
+        let callbackConfirmacionProv = null;
+
+        function abrirModalConfirmar(titulo, mensajeHtml, onConfirmar) {
+            document.getElementById('tituloConfirmar').innerText = titulo;
+            document.getElementById('textoConfirmar').innerHTML = mensajeHtml;
+            callbackConfirmacionProv = onConfirmar;
+            document.getElementById('modalConfirmar').style.display = 'flex';
+        }
+
+        function cerrarModalConfirmar() {
+            document.getElementById('modalConfirmar').style.display = 'none';
+            callbackConfirmacionProv = null;
         }
 
         function cerrarModal() { 
             document.getElementById('modalMensaje').style.display = 'none'; 
             if(esExito) {
-                window.location.href = 'dashboard.html';
+                cargarProveedores();
             }
         }
+
+        async function cargarProveedores() {
+            const tbody = document.getElementById('tbodyProveedores');
+            if (!tbody) return;
+            try {
+                const res = await fetch('/api/proveedores');
+                const data = await res.json();
+                if (data && data.length > 0) {
+                    let html = '';
+                    data.forEach(p => {
+                        html += `
+                            <tr style="border-bottom: 1px solid #dee2e6;">
+                                <td style="padding: 8px; font-weight: bold;">${p.ID_PROV || ''}</td>
+                                <td style="padding: 8px;">${p.NOM_PROV || ''}</td>
+                                <td style="padding: 8px;">${p.RFC_PROV || 'N/A'}</td>
+                                <td style="padding: 8px;">${p.CON_PROV || 'N/A'}</td>
+                                <td style="padding: 8px;">
+                                    <button onclick="eliminarProveedor('${p.ID_PROV}')" style="background-color: #dc3545; color: white; border: none; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px;">Eliminar</button>
+                                </td>
+                            </tr>
+                        `;
+                    });
+                    tbody.innerHTML = html;
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="5" style="padding: 10px; text-align: center; color: #777;">No hay proveedores registrados.</td></tr>';
+                }
+            } catch (err) {
+                tbody.innerHTML = '<tr><td colspan="5" style="padding: 10px; text-align: center; color: red;">Error al cargar proveedores.</td></tr>';
+            }
+        }
+
+        function eliminarProveedor(idProv) {
+            abrirModalConfirmar(
+                "Confirmar Eliminación",
+                `<p style="margin: 0 0 10px 0;">¿Está seguro de que desea eliminar al proveedor <strong>${idProv}</strong>?</p><p style="margin: 0; font-size: 12.5px; color: #555; background: #fff3cd; border-left: 3px solid #ffc107; padding: 8px; border-radius: 3px;"><strong>Nota del Sistema:</strong> Si el proveedor tiene productos o plantas asociados en el inventario, la eliminación será rechazada automáticamente conforme a la regla <strong>RN-26 (Integridad Referencial)</strong>.</p>`,
+                function() {
+                    ejecutarEliminacionProveedor(idProv);
+                }
+            );
+        }
+
+        async function ejecutarEliminacionProveedor(idProv) {
+            const rolActual = localStorage.getItem('rolUsuario') || '';
+            const usuarioActual = localStorage.getItem('usuarioLogueado') || '';
+
+            try {
+                const res = await fetch(`/api/proveedores/${encodeURIComponent(idProv)}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-rol-usuario': rolActual,
+                        'x-usuario': usuarioActual
+                    },
+                    body: JSON.stringify({
+                        rolUsuario: rolActual,
+                        usuarioLogueado: usuarioActual
+                    })
+                });
+
+                let data = null;
+                try {
+                    data = await res.json();
+                } catch (e) {
+                    data = null;
+                }
+
+                if (res.ok && data && data.exito) {
+                    esExito = false;
+                    document.getElementById('tituloModal').innerText = "Proveedor Eliminado";
+                    document.getElementById('textoModal').innerText = data.mensaje || `El proveedor "${idProv}" fue eliminado exitosamente.`;
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    cargarProveedores();
+                } else {
+                    esExito = false;
+                    const mensajeError = (data && data.error) ? data.error : "No se pudo eliminar el proveedor.";
+                    const esRN26 = mensajeError.includes('RN-26') || mensajeError.toLowerCase().includes('dependenc') || mensajeError.toLowerCase().includes('asociad');
+                    document.getElementById('tituloModal').innerText = esRN26 ? "Error de Integridad Referencial (RN-26)" : "Error al Eliminar";
+                    document.getElementById('textoModal').innerText = mensajeError;
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                }
+            } catch (err) {
+                document.getElementById('tituloModal').innerText = "Error de Servidor";
+                document.getElementById('textoModal').innerText = "Error de comunicación con el servidor al intentar eliminar el proveedor.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const btnSi = document.getElementById('btnConfirmarSi');
+            if (btnSi) {
+                btnSi.addEventListener('click', function() {
+                    if (typeof callbackConfirmacionProv === 'function') {
+                        const accion = callbackConfirmacionProv;
+                        cerrarModalConfirmar();
+                        accion();
+                    } else {
+                        cerrarModalConfirmar();
+                    }
+                });
+            }
+            cargarProveedores();
+        });
     </script>
 </body>
 </html>

@@ -133,6 +133,9 @@
                     <input type="number" id="saldo" step="0.01" min="0" value="0" required>
                 </div>
 
+                <!-- Mensaje de Validación / Error Visible (N6 / CU-30) -->
+                <div id="mensajeErrorVenta" style="display:none; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; padding: 12px; border-radius: 4px; margin-bottom: 15px; font-weight: bold; font-size: 14px; text-align: center;"></div>
+
                 <button type="submit" id="btnProcesarVenta">Procesar Venta</button>
             </form>
         </div>
@@ -146,14 +149,15 @@
         </div>
     </div>
 
-    <!-- Modal de Ticket con Opción de Impresión -->
+    <!-- Modal de Avisos y Ticket de Venta (N6 / CU-30) -->
     <div id="modalMensaje" class="custom-modal">
         <div class="custom-modal-content" style="max-width: 450px; text-align: center;">
-            <h3 id="tituloModal">Ticket de Venta</h3>
+            <h3 id="tituloModal">Aviso del Sistema</h3>
+            <p id="textoModal" style="display: none; font-size: 15px; margin: 15px 0; color: #333;"></p>
             <div id="contenidoModal" style="margin: 15px 0;"></div>
             <div style="display: flex; gap: 10px; justify-content: center;">
-                <button onclick="window.print()" style="background-color: var(--secondary-color); padding: 10px 20px;">Imprimir Ticket</button>
-                <button onclick="cerrarModal()" style="background-color: #6c757d; padding: 10px 20px;">Aceptar</button>
+                <button id="btnImprimirTicket" onclick="window.print()" style="display: none; background-color: var(--secondary-color); padding: 10px 20px;">Imprimir Ticket</button>
+                <button id="btnAceptarModal" onclick="cerrarModal()" style="background-color: #6c757d; padding: 10px 20px;">Aceptar</button>
             </div>
         </div>
     </div>
@@ -198,6 +202,17 @@
                 });
 
             cargarHistorialVentas();
+
+            // Formateo y sanitización automática del campo de saldo para evitar residuos de flotantes (N6)
+            const campoSaldo = document.getElementById('saldo');
+            if (campoSaldo) {
+                campoSaldo.addEventListener('blur', function() {
+                    const val = parseFloat(this.value);
+                    if (!isNaN(val)) {
+                        this.value = (Math.round((val + Number.EPSILON) * 100) / 100).toFixed(2);
+                    }
+                });
+            }
         };
 
         function calcularTotal() {
@@ -219,7 +234,7 @@
                 if (pl) precioPlanta = parseFloat(pl.PREC_PLANTA) || 0;
             }
 
-            const total = (precioProd * cantProd) + (precioPlanta * cantPlanta);
+            const total = Math.round(((precioProd * cantProd) + (precioPlanta * cantPlanta) + Number.EPSILON) * 100) / 100;
             document.getElementById('total').value = total.toFixed(2);
         }
 
@@ -303,18 +318,54 @@
                 </div>
             `;
 
-            document.getElementById('tituloModal').innerText = `Ticket de Venta (${v.ID_VEN})`;
-            document.getElementById('contenidoModal').innerHTML = contenido;
-            document.getElementById('modalMensaje').style.display = 'flex';
+            mostrarAviso(`Ticket de Venta (${v.ID_VEN})`, contenido, true);
+        }
+
+        function mostrarAviso(titulo, texto, esTicket = false) {
+            const titEl = document.getElementById('tituloModal');
+            const txtEl = document.getElementById('textoModal');
+            const contEl = document.getElementById('contenidoModal');
+            const btnImp = document.getElementById('btnImprimirTicket');
+            const banner = document.getElementById('mensajeErrorVenta');
+
+            if (titEl) titEl.innerText = titulo;
+
+            if (esTicket) {
+                if (txtEl) { txtEl.innerText = ''; txtEl.style.display = 'none'; }
+                if (contEl) { contEl.innerHTML = texto; contEl.style.display = 'block'; }
+                if (btnImp) btnImp.style.display = 'inline-block';
+                if (banner) banner.style.display = 'none';
+            } else {
+                if (txtEl) { txtEl.innerText = texto; txtEl.style.display = 'block'; }
+                if (contEl) { contEl.innerHTML = `<p style="font-size: 15px; margin: 15px 0;">${texto}</p>`; contEl.style.display = 'block'; }
+                if (btnImp) btnImp.style.display = 'none';
+                if (banner) {
+                    banner.innerText = texto;
+                    banner.style.display = 'block';
+                }
+            }
+
+            const modal = document.getElementById('modalMensaje');
+            if (modal) modal.style.display = 'flex';
         }
 
         function realizarVenta(event) {
             event.preventDefault();
 
+            // Ocultar banner previo de error si existiera
+            const banner = document.getElementById('mensajeErrorVenta');
+            if (banner) banner.style.display = 'none';
+
             // Evitar envíos múltiples o simultáneos (CU-31 / CU-12)
             if (procesandoVenta) {
                 return;
             }
+
+            const redondearDinero = (val) => {
+                const num = typeof val === 'number' ? val : parseFloat(String(val).trim());
+                if (isNaN(num)) return 0;
+                return Math.round((num + Number.EPSILON) * 100) / 100;
+            };
             
             const id_cliente = document.getElementById('id_cliente').value;
             const id_producto = document.getElementById('id_producto').value;
@@ -322,28 +373,44 @@
             const id_planta = document.getElementById('id_planta').value;
             const cant_planta = parseInt(document.getElementById('cant_planta').value) || 0;
             const forma_pago = document.getElementById('forma_pago').value;
-            const total = parseFloat(document.getElementById('total').value) || 0;
-            const saldo = parseFloat(document.getElementById('saldo').value) || 0;
+            const total = redondearDinero(document.getElementById('total').value);
+            const saldo = redondearDinero(document.getElementById('saldo').value);
             const cajero = localStorage.getItem('usuarioLogueado') || 'Administrador';
 
             if (!id_cliente) {
-                alert("Debe seleccionar un cliente.");
+                mostrarAviso("Validación de Venta", "Debe seleccionar un cliente.");
                 return;
             }
 
             if (!id_producto && !id_planta) {
-                alert("Debe seleccionar al menos un producto o una planta.");
+                mostrarAviso("Validación de Venta", "Debe seleccionar al menos un producto o una planta.");
                 return;
             }
 
-            // Validación RN-29: El saldo pendiente nunca puede ser mayor que el total
+            if (id_producto && cant_producto <= 0) {
+                mostrarAviso("Validación de Venta", "La cantidad del producto debe ser un número entero mayor que 0.");
+                return;
+            }
+
+            if (id_planta && cant_planta <= 0) {
+                mostrarAviso("Validación de Venta", "La cantidad de la planta debe ser un número entero mayor que 0.");
+                return;
+            }
+
+            // Validación N2: El total de la venta debe ser mayor a 0 (no se permiten ventas con total $0.00)
+            if (total <= 0) {
+                mostrarAviso("Validación de Venta", "El total de la venta debe ser mayor a 0 (no se permiten ventas con total $0.00).");
+                return;
+            }
+
+            // Validación RN-29: El saldo pendiente nunca puede ser mayor que el total (CU-30 / N6)
             if (saldo > total) {
-                alert("El saldo pendiente no puede exceder el total de la venta (RN-29).");
+                mostrarAviso("Validación de Venta", "El saldo pendiente no puede exceder el total de la venta (RN-29).");
                 return;
             }
 
             if (saldo < 0) {
-                alert("El saldo pendiente no puede ser negativo (RN-16).");
+                mostrarAviso("Validación de Venta", "El saldo pendiente no puede ser negativo (RN-16).");
                 return;
             }
 
@@ -369,9 +436,14 @@
                 },
                 body: JSON.stringify(datos)
             })
-            .then(res => res.json())
-            .then(data => {
-                if (data.exito) {
+            .then(async res => {
+                let data = null;
+                try {
+                    data = await res.json();
+                } catch(e) {
+                    data = null;
+                }
+                if (res.ok && data && data.exito) {
                     // Magia aquí: Usamos .then() para esperar a que termine de cargar el historial
                     // antes de intentar abrir el modal del ticket.
                     cargarHistorialVentas().then(() => {
@@ -382,10 +454,11 @@
                         document.getElementById('total').value = '';
                     });
                 } else {
-                    alert(data.error || "Error al procesar la venta.");
+                    const mensajeError = (data && data.error) ? data.error : "Error al procesar la venta.";
+                    mostrarAviso("Aviso", mensajeError);
                 }
             })
-            .catch(err => alert("Error de comunicación con el servidor."))
+            .catch(err => mostrarAviso("Error de Servidor", "Error de comunicación con el servidor."))
             .finally(() => {
                 // Re-habilitar botón al finalizar la operación (CU-31 / CU-12)
                 procesandoVenta = false;

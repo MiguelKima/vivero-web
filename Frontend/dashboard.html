@@ -137,8 +137,9 @@
                     <!-- Los campos se generarán automáticamente aquí -->
                 </div>
                 
-                <div style="display: flex; gap: 10px; margin-top: 10px;">
+                <div style="display: flex; gap: 8px; margin-top: 15px; flex-wrap: wrap;">
                     <button type="submit" style="background-color: var(--primary-color); color: white; padding: 10px; border:none; border-radius:4px; cursor:pointer; flex: 1; font-weight: bold;">Guardar Cambios</button>
+                    <button type="button" onclick="eliminarRegistroDesdeModal()" id="btnEliminarModal" style="background-color: #dc3545; color: white; padding: 10px; border:none; border-radius:4px; cursor:pointer; flex: 1; font-weight: bold;">Eliminar Registro</button>
                     <button type="button" onclick="cerrarEditor()" style="background-color: #6c757d; color: white; padding: 10px; border:none; border-radius:4px; cursor:pointer; flex: 1;">Cancelar</button>
                 </div>
             </form>
@@ -151,6 +152,18 @@
             <h3 id="tituloModal">Aviso del Sistema</h3>
             <p id="textoModal">Mensaje informativo.</p>
             <button onclick="cerrarModal()">Aceptar</button>
+        </div>
+    </div>
+
+    <!-- MODAL DE CONFIRMACIÓN DEL SISTEMA (CU-11 / CU-12 / CU-47 / RN-26) -->
+    <div id="modalConfirmar" class="custom-modal">
+        <div class="custom-modal-content" style="max-width: 420px; text-align: center;">
+            <h3 id="tituloConfirmar" style="color: #c0392b; margin-top: 0;">Confirmar Eliminación</h3>
+            <div id="textoConfirmar" style="font-size: 14px; margin: 15px 0 25px 0; text-align: left; line-height: 1.5; color: var(--text-color);"></div>
+            <div style="display: flex; gap: 10px; justify-content: center;">
+                <button type="button" id="btnConfirmarSi" style="background-color: #dc3545; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; flex: 1;">Sí, Eliminar</button>
+                <button type="button" onclick="cerrarModalConfirmar()" style="background-color: #6c757d; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; flex: 1;">Cancelar</button>
+            </div>
         </div>
     </div>
 
@@ -191,13 +204,7 @@
             return limpio.trim();
         }
 
-        window.onload = function() {
-            const rol = localStorage.getItem('rolUsuario');
-            if (rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador')) {
-                isAdmin = true;
-                document.getElementById('seccionAdmin').style.display = 'block';
-            }
-
+        function cargarTodasLasTablas() {
             fetch('/api/proveedores').then(res => res.json()).then(data => {
                 if (data && data.length > 0) listaProveedores = data;
             }).catch(() => {});
@@ -215,6 +222,16 @@
             fetch('/api/dashboard/ventas').then(res => res.json()).then(data => llenarTabla('tabla-ventas', ['ID Venta', 'Cliente', 'Pago', 'Total'], ['ID_VEN', 'ID_CLI', 'FORM_PAGO', 'TOT_PAGO'], data, { tablaSQL: 'VENTAS', idCol: 'ID_VEN' }));
             fetch('/api/dashboard/servicios').then(res => res.json()).then(data => llenarTabla('tabla-servicios', ['ID', 'Cliente', 'Trabajo', 'Costo'], ['ID_SERV', 'ID_CLI', 'TRAB_REAL', 'COSTO_SERV'], data, { tablaSQL: 'SERVICIOS', idCol: 'ID_SERV' }));
             fetch('/api/dashboard/catalogo-servicios').then(res => res.json()).then(data => llenarTabla('tabla-cat-servicios', ['ID', 'Servicio', 'Costo Est.'], ['ID_CAT_SERV', 'NOM_SERV', 'COSTO_EST'], data, { tablaSQL: 'CAT_SERVICIOS', idCol: 'ID_CAT_SERV' }));
+        }
+
+        window.onload = function() {
+            const rol = localStorage.getItem('rolUsuario');
+            if (rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador')) {
+                isAdmin = true;
+                document.getElementById('seccionAdmin').style.display = 'block';
+            }
+
+            cargarTodasLasTablas();
         };
 
         function llenarTabla(elementId, headers, keysSQL, datos, config) {
@@ -232,17 +249,21 @@
                 html += `<tr>`;
                 keysSQL.forEach(k => {
                     let val = item[k] !== null && item[k] !== undefined ? item[k] : '';
-                    if (typeof val === 'number' && (k.includes('PREC') || k.includes('COSTO') || k.includes('TOT') || k.includes('SUE'))) {
+                    if (typeof val === 'number' && (k.includes('PREC') || k.includes('COSTO') || k.includes('TOT') || k.includes('SUE') || k.includes('SALDO'))) {
                         html += `<td>$${val.toFixed(2)}</td>`;
                     } else {
                         html += `<td>${escapeHtml(val)}</td>`;
                     }
                 });
                 
-                // Si es admin, inyectamos la data de la fila directo al botón
+                // Si es admin, inyectamos la data de la fila directo a los botones de Acción (Editar y Eliminar / RN-26 / N5)
                 if (isAdmin) {
                     const itemDataStr = encodeURIComponent(JSON.stringify(item)).replace(/'/g, '%27');
-                    html += `<td><button onclick="abrirEditor('${config.tablaSQL}', '${config.idCol}', decodeURIComponent('${itemDataStr}'))" class="btn-editar">Editar</button></td>`;
+                    const idValorSeguro = String(item[config.idCol] || '').replace(/'/g, "\\'");
+                    html += `<td>
+                        <button onclick="abrirEditor('${config.tablaSQL}', '${config.idCol}', decodeURIComponent('${itemDataStr}'))" class="btn-editar">Editar</button>
+                        <button onclick="confirmarEliminar('${config.tablaSQL}', '${config.idCol}', '${idValorSeguro}')" class="btn-eliminar" style="background-color: #dc3545; color: white; border: none; padding: 4px 8px; border-radius: 3px; cursor: pointer; margin-left: 5px; font-weight: bold;">Eliminar</button>
+                    </td>`;
                 }
                 html += `</tr>`; 
             });
@@ -409,6 +430,15 @@
                 // Solo las llaves primarias o nombres obligatorios llevan required
                 const isRequired = isPrimaryKey || key === 'NOM_CLI' || key === 'NOM_PROV' || key === 'NOM_SERV' || key === 'NOM_EMP' || key === 'DESC_PRO' || key === 'ID_PROV';
                 
+                // Longitudes según Diccionario de Datos (N4 / RN-19)
+                let maxLenAttr = '';
+                if (key === 'NOM_EMP') maxLenAttr = 'maxlength="150"';
+                else if (key === 'TRAB_REAL') maxLenAttr = 'maxlength="200"';
+                else if (key === 'USERNAME') maxLenAttr = 'maxlength="80"';
+                else if (key === 'CURP_EMP') maxLenAttr = 'maxlength="18"';
+                else if (key === 'NOM_CLI' || key === 'NOM_PROV' || key === 'NOM_SERV' || key === 'NOM_CTFO' || key === 'NOM_COM') maxLenAttr = 'maxlength="150"';
+                else if (key === 'DESC_PRO' || key === 'DIR_EMP' || key === 'DIR_CLI' || key === 'DIR_PROV') maxLenAttr = 'maxlength="200"';
+
                 let htmlCampo = `
                     <div style="margin-bottom: 12px;" id="contenedor_${key}">
                         <label for="edit_${key}" style="display: block; font-size: 12px; font-weight: bold; margin-bottom: 4px; color: #555;">${labelText}</label>
@@ -418,6 +448,7 @@
                                data-name="${key.toLowerCase()}"
                                step="any"
                                ${inputType === 'number' ? 'min="0"' : ''}
+                               ${maxLenAttr}
                                class="campo-editor"
                                data-key="${key}"
                                placeholder="${labelText}"
@@ -450,10 +481,15 @@
             }
 
             // Asignación segura del valor directo en la propiedad DOM value para que etiquetas HTML o instrucciones SQL no rompan los inputs (V-01 / V-07 / CU-52)
+            // Se formatea cualquier valor de dinero para evitar artefactos de redondeo flotante como 499.989990234375 (N6)
             Object.keys(item).forEach(key => {
                 const inputEl = document.getElementById(`edit_${key}`);
                 if (inputEl) {
-                    inputEl.value = item[key] !== null && item[key] !== undefined ? item[key] : '';
+                    let val = item[key];
+                    if (typeof val === 'number' && (key.includes('PREC') || key.includes('COSTO') || key.includes('TOT') || key.includes('SUE') || key.includes('SALDO'))) {
+                        val = (Math.round((val + Number.EPSILON) * 100) / 100).toFixed(2);
+                    }
+                    inputEl.value = val !== null && val !== undefined ? val : '';
                 }
             });
 
@@ -516,8 +552,18 @@
                 const rawPrecio = campos['PREC_PRO'] !== undefined ? campos['PREC_PRO'] : (campos['prec_pro'] !== undefined ? campos['prec_pro'] : campos['precio']);
                 if (rawPrecio !== undefined && rawPrecio !== null && String(rawPrecio).trim() !== '') {
                     const numPrecio = parseFloat(rawPrecio);
-                    if (isNaN(numPrecio) || numPrecio < 0) {
-                        mostrarMensaje("Precio Inválido", 'El precio del producto debe ser mayor o igual a 0 y no puede ser negativo (RN-16).');
+                    if (isNaN(numPrecio) || numPrecio <= 0) {
+                        mostrarMensaje("Precio Inválido", 'El precio del producto debe ser mayor a 0 ($0.00 no permitido porque no es gratis).');
+                        return;
+                    }
+                }
+
+                // Validación de stock para PRODUCTOS (mayor a 0)
+                const rawStock = campos['STOCK_PRO'] !== undefined ? campos['STOCK_PRO'] : campos['stock'];
+                if (rawStock !== undefined && rawStock !== null && String(rawStock).trim() !== '') {
+                    const numStock = Number(String(rawStock).trim());
+                    if (isNaN(numStock) || !Number.isInteger(numStock) || numStock <= 0) {
+                        mostrarMensaje("Stock Inválido", 'El stock del producto debe ser un número entero mayor a 0 (no se permiten existencias en 0).');
                         return;
                     }
                 }
@@ -553,8 +599,17 @@
                 const rawStock = campos['STOCK_PLANT'] !== undefined ? campos['STOCK_PLANT'] : campos['stock'];
                 if (rawStock !== undefined && rawStock !== null && String(rawStock).trim() !== '') {
                     const numStock = Number(String(rawStock).trim());
-                    if (isNaN(numStock) || !Number.isInteger(numStock) || numStock < 0) {
-                        mostrarMensaje("Stock Inválido", 'El stock de la planta debe ser un número entero mayor o igual a 0 (no se permiten valores negativos, RN-17).');
+                    if (isNaN(numStock) || !Number.isInteger(numStock) || numStock <= 0) {
+                        mostrarMensaje("Stock Inválido", 'El stock de la planta debe ser un número entero mayor a 0 (no se permiten existencias en 0).');
+                        return;
+                    }
+                }
+
+                const rawPrecioPlant = campos['PREC_PLANTA'] !== undefined ? campos['PREC_PLANTA'] : campos['precio'];
+                if (rawPrecioPlant !== undefined && rawPrecioPlant !== null && String(rawPrecioPlant).trim() !== '') {
+                    const numPrecioPlant = parseFloat(rawPrecioPlant);
+                    if (isNaN(numPrecioPlant) || numPrecioPlant <= 0) {
+                        mostrarMensaje("Precio Inválido", 'El precio de la planta debe ser mayor a 0 ($0.00 no permitido porque no es gratis).');
                         return;
                     }
                 }
@@ -581,13 +636,37 @@
                 }
             }
 
-            // Validación de stock para PRODUCTOS (CU-22 / RN-17)
-            if (tabla.toUpperCase() === 'PRODUCTOS') {
-                const rawStock = campos['STOCK_PRO'] !== undefined ? campos['STOCK_PRO'] : campos['stock'];
-                if (rawStock !== undefined && rawStock !== null && String(rawStock).trim() !== '') {
-                    const numStock = Number(String(rawStock).trim());
-                    if (isNaN(numStock) || !Number.isInteger(numStock) || numStock < 0) {
-                        mostrarMensaje("Stock Inválido", 'El stock del producto debe ser un número entero mayor o igual a 0 (no se permiten valores negativos, RN-17).');
+            // Validación específica para CAT_SERVICIOS (costo mayor a 0)
+            if (tabla.toUpperCase() === 'CAT_SERVICIOS') {
+                const rawCosto = campos['COSTO_EST'] !== undefined ? campos['COSTO_EST'] : campos['costo'];
+                if (rawCosto !== undefined && rawCosto !== null && String(rawCosto).trim() !== '') {
+                    const numCosto = parseFloat(rawCosto);
+                    if (isNaN(numCosto) || numCosto <= 0) {
+                        mostrarMensaje("Costo Inválido", 'El costo estándar debe ser mayor a 0 ($0.00 no permitido porque no es gratis).');
+                        return;
+                    }
+                }
+            }
+
+            // Validación específica para SERVICIOS (costo mayor a 0)
+            if (tabla.toUpperCase() === 'SERVICIOS') {
+                const rawCostoServ = campos['COSTO_SERV'] !== undefined ? campos['COSTO_SERV'] : campos['costo'];
+                if (rawCostoServ !== undefined && rawCostoServ !== null && String(rawCostoServ).trim() !== '') {
+                    const numCostoServ = parseFloat(rawCostoServ);
+                    if (isNaN(numCostoServ) || numCostoServ <= 0) {
+                        mostrarMensaje("Costo Inválido", 'El costo del servicio debe ser mayor a 0 ($0.00 no permitido porque no es gratis).');
+                        return;
+                    }
+                }
+            }
+
+            // Validación específica para EMPLEADOS (sueldo mayor a 0)
+            if (tabla.toUpperCase() === 'EMPLEADOS') {
+                const rawSueldo = campos['SUE_EMP'] !== undefined ? campos['SUE_EMP'] : campos['sueldo'];
+                if (rawSueldo !== undefined && rawSueldo !== null && String(rawSueldo).trim() !== '') {
+                    const numSueldo = parseFloat(rawSueldo);
+                    if (isNaN(numSueldo) || numSueldo <= 0) {
+                        mostrarMensaje("Sueldo Inválido", 'El sueldo del empleado debe ser mayor a 0 ($0.00 no permitido).');
                         return;
                     }
                 }
@@ -616,12 +695,107 @@
             .then(data => {
                 if(data.exito) {
                     cerrarEditor();
-                    window.location.reload(); // Recargamos para reflejar los cambios
+                    cargarTodasLasTablas();
+                    const mensajeConfirmacion = data.mensaje || `Registro actualizado correctamente en ${tabla}.`;
+                    mostrarMensaje("Cambios Guardados", mensajeConfirmacion);
                 } else {
-                    mostrarMensaje("Error", 'Error en actualización: ' + (data.error || 'No se pudo actualizar'));
+                    mostrarMensaje("Error de Validación", data.error || 'No se pudo actualizar el registro. Verifique los datos ingresados.');
                 }
             })
-            .catch(err => mostrarMensaje("Error", 'Error de comunicación con el servidor'));
+            .catch(err => mostrarMensaje("Error de Conexión", 'Error de comunicación con el servidor al intentar actualizar el registro.'));
+        }
+
+        let callbackConfirmacion = null;
+
+        function abrirModalConfirmar(titulo, mensajeHtml, onConfirmar) {
+            document.getElementById('tituloConfirmar').innerText = titulo;
+            document.getElementById('textoConfirmar').innerHTML = mensajeHtml;
+            callbackConfirmacion = onConfirmar;
+            document.getElementById('modalConfirmar').style.display = 'flex';
+        }
+
+        function cerrarModalConfirmar() {
+            document.getElementById('modalConfirmar').style.display = 'none';
+            callbackConfirmacion = null;
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const btnSi = document.getElementById('btnConfirmarSi');
+            if (btnSi) {
+                btnSi.addEventListener('click', function() {
+                    if (typeof callbackConfirmacion === 'function') {
+                        const accion = callbackConfirmacion;
+                        cerrarModalConfirmar();
+                        accion();
+                    } else {
+                        cerrarModalConfirmar();
+                    }
+                });
+            }
+        });
+
+        function eliminarRegistro(tabla, idCol, idValue) {
+            abrirModalConfirmar(
+                "Confirmar Eliminación",
+                `<p style="margin: 0 0 10px 0;">¿Está seguro de que desea eliminar el registro <strong>${escapeHtml(idValue)}</strong> de la tabla <strong>${escapeHtml(tabla)}</strong>?</p><p style="margin: 0; font-size: 12.5px; color: #555; background: #fff3cd; border-left: 3px solid #ffc107; padding: 8px; border-radius: 3px;"><strong>Nota del Sistema:</strong> Si el registro tiene dependencias asociadas en otras tablas, la eliminación será rechazada automáticamente conforme a la regla <strong>RN-26 (Integridad Referencial)</strong>.</p>`,
+                function() {
+                    ejecutarEliminacion(tabla, idCol, idValue);
+                }
+            );
+        }
+
+        async function ejecutarEliminacion(tabla, idCol, idValue) {
+            const usuarioActual = localStorage.getItem('usuarioLogueado') || '';
+            const rolActual = localStorage.getItem('rolUsuario') || '';
+
+            try {
+                const res = await fetch('/api/eliminar', {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-rol-usuario': rolActual,
+                        'x-usuario': usuarioActual
+                    },
+                    body: JSON.stringify({
+                        tabla,
+                        idColumn: idCol,
+                        idValue,
+                        rolUsuario: rolActual,
+                        usuarioLogueado: usuarioActual
+                    })
+                });
+
+                let data = null;
+                try {
+                    data = await res.json();
+                } catch (e) {
+                    data = null;
+                }
+
+                if (res.ok && data && data.exito) {
+                    cerrarEditor();
+                    cargarTodasLasTablas();
+                    mostrarMensaje("Registro Eliminado", data.mensaje || `El registro "${idValue}" fue eliminado exitosamente de la tabla ${tabla}.`);
+                } else {
+                    const mensajeError = (data && data.error) ? data.error : "No se pudo eliminar el registro.";
+                    const esRN26 = mensajeError.includes('RN-26') || mensajeError.toLowerCase().includes('dependenc') || mensajeError.toLowerCase().includes('asociad');
+                    mostrarMensaje(esRN26 ? "Error de Integridad Referencial (RN-26)" : "Error al Eliminar", mensajeError);
+                }
+            } catch (err) {
+                mostrarMensaje("Error de Conexión", "Error de comunicación con el servidor al intentar eliminar el registro.");
+            }
+        }
+
+        function eliminarRegistroDesdeModal() {
+            const tabla = document.getElementById('editTabla').value;
+            const idCol = document.getElementById('editIdCol').value;
+            const idValue = document.getElementById('editIdValue').value;
+            if (!tabla || !idValue) return;
+            eliminarRegistro(tabla, idCol, idValue);
+        }
+
+        function confirmarEliminar(tabla, idCol, idValue) {
+            eliminarRegistro(tabla, idCol, idValue);
         }
 
         function mostrarMensaje(titulo, mensaje) {
@@ -631,9 +805,6 @@
                 document.getElementById('textoModal').innerText = mensaje;
                 modal.style.display = 'flex';
             }
-            try {
-                alert(mensaje);
-            } catch(e) {}
         }
 
         function cerrarModal() {

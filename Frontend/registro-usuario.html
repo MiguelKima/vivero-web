@@ -7,28 +7,28 @@
     
     <!-- GUARDIÁN DE SEGURIDAD Y PERMISOS (CU-6 / CU-18 / RN-34 / RN-35) -->
     <script>
-        function verificarSesion() {
+        if (!localStorage.getItem('usuarioLogueado')) {
+            window.location.replace('/'); 
+        }
+        window.addEventListener('pageshow', function(event) {
             if (!localStorage.getItem('usuarioLogueado')) {
                 window.location.replace('/'); 
-                return;
             }
-            // Bloqueo de acceso para Empleados (CU-18 / RN-34 / RN-35)
-            const rol = localStorage.getItem('rolUsuario');
-            const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
-            if (!esAdmin) {
-                alert('Acceso no autorizado. Se requieren privilegios de Administrador para gestionar usuarios.');
-                window.location.replace('dashboard.html');
-            }
-        }
-        verificarSesion();
-        window.addEventListener('pageshow', function(event) {
-            verificarSesion();
         });
         document.addEventListener('DOMContentLoaded', function() {
             const rol = localStorage.getItem('rolUsuario');
             const esAdmin = rol && (rol.toLowerCase() === 'admin' || rol.toLowerCase() === 'administrador');
             if (!esAdmin) {
                 document.querySelectorAll('nav a[href="registro-empleado.html"], nav a[href="registro-usuario.html"], nav a[href="registro-catalogo-servicio.html"]').forEach(el => el.style.display = 'none');
+                const adminCont = document.querySelector('.admin-container') || document.querySelector('form');
+                if (adminCont) adminCont.style.display = 'none';
+                mostrarModalAcceso(
+                    "Acceso No Autorizado",
+                    "Se requieren privilegios de Administrador para gestionar usuarios en el sistema (CU-18 / RN-34 / RN-35).",
+                    function() {
+                        window.location.replace('dashboard.html');
+                    }
+                );
             }
         });
     </script>
@@ -84,9 +84,23 @@
 
         <!-- Tabla de Gestión de Usuarios (Activar / Inhabilitar) -->
         <div class="card">
-            <h2>Control de Accesos (Usuarios Registrados)</h2>
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                <h2 style="margin: 0;">Control de Accesos (Usuarios Registrados)</h2>
+                <button type="button" onclick="alternarAuditoria()" style="background-color: var(--secondary-color); padding: 8px 14px; font-size: 13px; border-radius: 4px; border: none; cursor: pointer; color: white;">
+                    📋 Ver Bitácora de Auditoría (N9)
+                </button>
+            </div>
             <div id="contenedor-usuarios" style="margin-top: 20px;">
                 <p>Cargando lista de usuarios...</p>
+            </div>
+
+            <!-- Panel de Auditoría Desplegable (N9) -->
+            <div id="seccion-auditoria" style="display: none; margin-top: 30px; border-top: 2px dashed #ccc; padding-top: 20px;">
+                <h3 style="color: var(--primary-color);">Bitácora de Trazabilidad y Auditoría de Usuarios (N9)</h3>
+                <p style="font-size: 13px; color: #666;">Historial de creaciones, modificaciones, cambios de estado y eliminaciones registradas en la base de datos.</p>
+                <div id="contenedor-auditoria" style="margin-top: 10px; overflow-x: auto;">
+                    <p>Cargando bitácora de auditoría...</p>
+                </div>
             </div>
         </div>
     </div>
@@ -137,12 +151,22 @@
 
     <script>
         let esExito = false;
+        let modalAccesoCallback = null;
+
+        function mostrarModalAcceso(titulo, mensaje, onCerrar) {
+            const modal = document.getElementById('modalMensaje');
+            if (modal) {
+                document.getElementById('tituloModal').innerText = titulo;
+                document.getElementById('textoModal').innerText = mensaje;
+                modalAccesoCallback = onCerrar || null;
+                modal.style.display = 'flex';
+            }
+        }
 
         window.onload = function() {
             const rol = localStorage.getItem('rolUsuario');
             if (!rol || (rol.toLowerCase() !== 'admin' && rol.toLowerCase() !== 'administrador')) {
-                alert('Acceso no autorizado. Se requieren privilegios de Administrador.');
-                window.location.href = 'dashboard.html';
+                return;
             }
 
             cargarEmpleados();
@@ -238,10 +262,16 @@
                 if(data.exito) {
                     cargarUsuariosSistema();
                 } else {
-                    alert(data.error || "No se pudo actualizar el estado.");
+                    document.getElementById('tituloModal').innerText = "Aviso del Sistema";
+                    document.getElementById('textoModal').innerText = data.error || "No se pudo actualizar el estado del usuario.";
+                    document.getElementById('modalMensaje').style.display = 'flex';
                 }
             })
-            .catch(err => alert("Error de comunicación con el servidor."));
+            .catch(err => {
+                document.getElementById('tituloModal').innerText = "Error de Conexión";
+                document.getElementById('textoModal').innerText = "Error de comunicación con el servidor al intentar cambiar el estado.";
+                document.getElementById('modalMensaje').style.display = 'flex';
+            });
         }
 
         function guardarUsuario(event) {
@@ -288,40 +318,46 @@
                 username: username,
                 password: password,
                 rol: rol,
-                id_emp: idEmpVal && idEmpVal.trim() ? idEmpVal.trim() : null,
-                rol_solicitante: localStorage.getItem('rolUsuario') || '',
-                usuarioLogueado: localStorage.getItem('usuarioLogueado') || ''
+                id_emp: idEmpVal && idEmpVal.trim() && idEmpVal.trim().toLowerCase() !== 'null' ? idEmpVal.trim() : null,
+                rol_solicitante: localStorage.getItem('rolUsuario') || 'Administrador',
+                usuarioLogueado: localStorage.getItem('usuarioLogueado') || 'admin'
             };
 
             fetch('/api/usuarios', {
                 method: 'POST',
                 headers: { 
                     'Content-Type': 'application/json',
-                    'x-rol-usuario': localStorage.getItem('rolUsuario') || '',
-                    'x-usuario': localStorage.getItem('usuarioLogueado') || ''
+                    'x-rol-usuario': localStorage.getItem('rolUsuario') || 'Administrador',
+                    'x-usuario': localStorage.getItem('usuarioLogueado') || 'admin'
                 },
                 body: JSON.stringify(datos)
             })
             .then(async res => {
-                const data = await res.json();
-                if(res.ok && data.exito) {
+                let data = null;
+                try {
+                    data = await res.json();
+                } catch (e) {
+                    data = null;
+                }
+                if(res.ok && data && data.exito) {
                     esExito = true;
                     document.getElementById('tituloModal').innerText = "Registro Exitoso";
                     document.getElementById('textoModal').innerText = data.mensaje;
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    cargarUsuariosSistema();
                 } else {
                     esExito = false;
-                    const mensajeError = data.error || "No se pudo registrar el usuario.";
+                    const mensajeError = (data && data.error) ? data.error : (res.status === 403 ? "Acceso denegado. Se requieren permisos de Administrador (RN-34 / RN-35)." : `Error de Servidor (${res.status}): No se pudo registrar el usuario.`);
                     const esErrorUnique = mensajeError.toUpperCase().includes('UNIQUE');
                     document.getElementById('tituloModal').innerText = esErrorUnique ? "Error UNIQUE (RN-13 / CP-13)" : "Aviso";
                     document.getElementById('textoModal').innerText = mensajeError;
-                    alert(mensajeError);
+                    document.getElementById('modalMensaje').style.display = 'flex';
                 }
-                document.getElementById('modalMensaje').style.display = 'flex';
             })
             .catch(err => {
                 esExito = false;
                 document.getElementById('tituloModal').innerText = "Error de Servidor";
-                document.getElementById('textoModal').innerText = "Error de comunicación con la base de datos.";
+                document.getElementById('textoModal').innerText = "Error de comunicación con el servidor: " + (err && err.message ? err.message : String(err));
                 document.getElementById('modalMensaje').style.display = 'flex';
             });
         }
@@ -364,31 +400,35 @@
             const payload = {
                 username: nuevoUsername,
                 rol: nuevoRol,
-                id_emp: nuevoIdEmp && nuevoIdEmp.trim() ? nuevoIdEmp.trim() : null,
-                rol_solicitante: localStorage.getItem('rolUsuario') || '',
-                usuarioLogueado: localStorage.getItem('usuarioLogueado') || ''
+                id_emp: nuevoIdEmp && nuevoIdEmp.trim() && nuevoIdEmp.trim().toLowerCase() !== 'null' ? nuevoIdEmp.trim() : null,
+                rol_solicitante: localStorage.getItem('rolUsuario') || 'Administrador',
+                usuarioLogueado: localStorage.getItem('usuarioLogueado') || 'admin'
             };
 
             fetch(`/api/usuarios/${encodeURIComponent(idUsuario)}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
-                    'x-rol-usuario': localStorage.getItem('rolUsuario') || '',
-                    'x-usuario': localStorage.getItem('usuarioLogueado') || ''
+                    'x-rol-usuario': localStorage.getItem('rolUsuario') || 'Administrador',
+                    'x-usuario': localStorage.getItem('usuarioLogueado') || 'admin'
                 },
                 body: JSON.stringify(payload)
             })
             .then(async res => {
-                const data = await res.json();
-                if (res.ok && data.exito) {
+                let data = null;
+                try {
+                    data = await res.json();
+                } catch (e) {
+                    data = null;
+                }
+                if (res.ok && data && data.exito) {
                     cerrarEditarUsuario();
                     mostrarAviso("Edición Exitosa", data.mensaje || "Usuario actualizado correctamente.", false);
                     cargarUsuariosSistema();
                 } else {
-                    const mensajeError = data.error || "No se pudo actualizar la información del usuario.";
+                    const mensajeError = (data && data.error) ? data.error : "No se pudo actualizar la información del usuario.";
                     const esErrorUnique = mensajeError.toUpperCase().includes('UNIQUE');
                     mostrarAviso(esErrorUnique ? "Error UNIQUE (RN-13 / CP-13)" : "Error al Modificar", mensajeError, false);
-                    alert(mensajeError);
                 }
             })
             .catch(err => {
@@ -403,8 +443,78 @@
             document.getElementById('modalMensaje').style.display = 'flex';
         }
 
+        function alternarAuditoria() {
+            const seccion = document.getElementById('seccion-auditoria');
+            if (seccion.style.display === 'none' || !seccion.style.display) {
+                seccion.style.display = 'block';
+                cargarAuditoria();
+            } else {
+                seccion.style.display = 'none';
+            }
+        }
+
+        function cargarAuditoria() {
+            const contenedor = document.getElementById('contenedor-auditoria');
+            contenedor.innerHTML = '<p>Consultando bitácora de auditoría en Supabase...</p>';
+
+            fetch('/api/auditoria/usuarios')
+                .then(res => res.json())
+                .then(data => {
+                    if (!data.exito || !data.auditoria || data.auditoria.length === 0) {
+                        contenedor.innerHTML = '<p>No se encontraron registros de auditoría en el sistema.</p>';
+                        return;
+                    }
+
+                    let tabla = `
+                        <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px;">
+                            <thead>
+                                <tr style="background-color: #f1f3f5; text-align: left; border-bottom: 2px solid #dee2e6;">
+                                    <th style="padding: 8px;">#</th>
+                                    <th style="padding: 8px;">Fecha / Hora</th>
+                                    <th style="padding: 8px;">Responsable</th>
+                                    <th style="padding: 8px;">Acción</th>
+                                    <th style="padding: 8px;">Usuario Afectado</th>
+                                    <th style="padding: 8px;">Detalles Previos</th>
+                                    <th style="padding: 8px;">Detalles Nuevos</th>
+                                    <th style="padding: 8px;">Origen</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                    `;
+
+                    data.auditoria.forEach(a => {
+                        const fecha = a.FECHA_HORA ? new Date(a.FECHA_HORA).toLocaleString() : 'N/A';
+                        const badgeColor = a.ACCION === 'ELIMINAR' ? '#d90429' : (a.ACCION === 'CREAR' ? '#2b9348' : '#0077b6');
+                        tabla += `
+                            <tr style="border-bottom: 1px solid #dee2e6;">
+                                <td style="padding: 8px;">${a.ID_AUDITORIA}</td>
+                                <td style="padding: 8px;">${fecha}</td>
+                                <td style="padding: 8px; font-weight: bold;">${a.USUARIO_RESPONSABLE || 'N/A'}</td>
+                                <td style="padding: 8px;"><span style="background-color: ${badgeColor}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px;">${a.ACCION}</span></td>
+                                <td style="padding: 8px; font-weight: bold;">${a.ID_USUARIO_AFECTADO || 'N/A'}</td>
+                                <td style="padding: 8px; font-family: monospace; font-size: 11px;">${a.DATOS_ANTERIORES || '-'}</td>
+                                <td style="padding: 8px; font-family: monospace; font-size: 11px;">${a.DATOS_NUEVOS || '-'}</td>
+                                <td style="padding: 8px; font-size: 11px; color: #555;">${a.ORIGEN || '-'}</td>
+                            </tr>
+                        `;
+                    });
+
+                    tabla += `</tbody></table>`;
+                    contenedor.innerHTML = tabla;
+                })
+                .catch(err => {
+                    contenedor.innerHTML = '<p style="color: red;">Error al consultar la bitácora: ' + err.message + '</p>';
+                });
+        }
+
         function cerrarModal() {
             document.getElementById('modalMensaje').style.display = 'none';
+            if (modalAccesoCallback) {
+                const cb = modalAccesoCallback;
+                modalAccesoCallback = null;
+                cb();
+                return;
+            }
             if(esExito) {
                 window.location.reload();
             }

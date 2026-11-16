@@ -113,7 +113,7 @@
 
                 <div class="form-group">
                     <label>Cantidad de Producto:</label>
-                    <input type="number" id="num_can" min="0" value="0" oninput="calcularTotalPedido()">
+                    <input type="number" id="num_can" min="1" step="1" value="1" oninput="calcularTotalPedido()">
                 </div>
 
                 <div class="form-group">
@@ -125,7 +125,7 @@
 
                 <div class="form-group">
                     <label>Cantidad de Plantas:</label>
-                    <input type="number" id="num_can_plant" min="0" value="0" oninput="calcularTotalPedido()">
+                    <input type="number" id="num_can_plant" min="1" step="1" value="1" oninput="calcularTotalPedido()">
                 </div>
 
                 <div class="form-group">
@@ -227,8 +227,10 @@
         function calcularTotalPedido() {
             const idProd = document.getElementById('id_pro').value;
             const idPlanta = document.getElementById('id_planta').value;
-            const cantProd = parseInt(document.getElementById('num_can').value) || 0;
-            const cantPlanta = parseInt(document.getElementById('num_can_plant').value) || 0;
+            const cantProdRaw = parseInt(document.getElementById('num_can').value);
+            const cantProd = (!isNaN(cantProdRaw) && cantProdRaw > 0) ? cantProdRaw : 0;
+            const cantPlantaRaw = parseInt(document.getElementById('num_can_plant').value);
+            const cantPlanta = (!isNaN(cantPlantaRaw) && cantPlantaRaw > 0) ? cantPlantaRaw : 0;
 
             let precioProd = 0;
             let precioPlanta = 0;
@@ -363,7 +365,7 @@
                 return;
             }
 
-            // Validación de existencia de producto (CU-28 / RN-23 / CU-11)
+            // Validación de existencia y cantidad de producto (CU-28 / RN-23 / CU-11 / N1)
             if (idPro) {
                 const existeProducto = listaProductos.some(p => p.ID_PRO === idPro);
                 if (!existeProducto) {
@@ -372,9 +374,18 @@
                     document.getElementById('modalMensaje').style.display = 'flex';
                     return;
                 }
+
+                const cantVal = document.getElementById('num_can').value;
+                const cantNum = Number(cantVal);
+                if (cantVal === '' || isNaN(cantNum) || !Number.isInteger(cantNum) || cantNum <= 0) {
+                    document.getElementById('tituloModal').innerText = "Validación";
+                    document.getElementById('textoModal').innerText = "La cantidad del producto debe ser un número entero mayor que 0.";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
             }
 
-            // Validación de existencia de planta (CU-28 / CU-29 / RN-23 / CU-11)
+            // Validación de existencia y cantidad de planta (CU-28 / CU-29 / RN-23 / CU-11 / N1)
             if (idPlanta) {
                 const existePlanta = listaPlantas.some(pl => pl.ID_PLANTA === idPlanta);
                 if (!existePlanta) {
@@ -383,7 +394,19 @@
                     document.getElementById('modalMensaje').style.display = 'flex';
                     return;
                 }
+
+                const cantPlantVal = document.getElementById('num_can_plant').value;
+                const cantPlantNum = Number(cantPlantVal);
+                if (cantPlantVal === '' || isNaN(cantPlantNum) || !Number.isInteger(cantPlantNum) || cantPlantNum <= 0) {
+                    document.getElementById('tituloModal').innerText = "Validación";
+                    document.getElementById('textoModal').innerText = "La cantidad de la planta debe ser un número entero mayor que 0.";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
             }
+
+            const cantProFinal = idPro ? parseInt(document.getElementById('num_can').value, 10) : null;
+            const cantPlantFinal = idPlanta ? parseInt(document.getElementById('num_can_plant').value, 10) : null;
 
             const datos = {
                 tip_ped: document.getElementById('tip_ped').value,
@@ -391,9 +414,9 @@
                 dir_envio: document.getElementById('dir_envio').value || null,
                 id_cli: document.getElementById('id_cli').value,
                 id_pro: idPro || null,
-                num_can: document.getElementById('num_can').value || 0,
+                num_can: cantProFinal,
                 id_planta: idPlanta || null,
-                num_can_plant: document.getElementById('num_can_plant').value || 0,
+                num_can_plant: cantPlantFinal,
                 id_rep: document.getElementById('id_rep').value,
                 tiem_entrega: document.getElementById('tiem_entrega').value,
                 tot_pedido: totalPedido
@@ -405,8 +428,13 @@
                 body: JSON.stringify(datos)
             })
             .then(async res => {
-                const data = await res.json();
-                if(res.ok && data.exito) {
+                let data = null;
+                try {
+                    data = await res.json();
+                } catch (e) {
+                    data = null;
+                }
+                if(res.ok && data && data.exito) {
                     // Recargar la tabla y abrir el ticket
                     cargarHistorialPedidos().then(() => {
                         verTicket(data.ticket.id_ped);
@@ -416,11 +444,12 @@
                     });
                 } else {
                     document.getElementById('tituloModal').innerText = "Aviso";
-                    document.getElementById('textoModal').innerText = data.error || "No se pudo registrar el pedido.";
+                    document.getElementById('textoModal').innerText = (data && data.error) ? data.error : "No se pudo registrar el pedido.";
                     document.getElementById('modalMensaje').style.display = 'flex';
                 }
             })
             .catch(err => {
+                esExito = false;
                 document.getElementById('tituloModal').innerText = "Error de Servidor";
                 document.getElementById('textoModal').innerText = "Error de comunicación con la base de datos.";
                 document.getElementById('modalMensaje').style.display = 'flex';
