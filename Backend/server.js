@@ -729,10 +729,10 @@ app.post('/api/empleados', async (req, res) => {
         let sueldoFinal = null;
         if (sue_emp !== undefined && sue_emp !== null && sue_emp !== '') {
             const numSueldo = parseFloat(sue_emp);
-            if (isNaN(numSueldo) || numSueldo <= 0) {
+            if (isNaN(numSueldo) || numSueldo < 0) {
                 return res.status(400).json({
                     exito: false,
-                    error: 'El sueldo del empleado debe ser mayor a 0 ($0.00 no permitido).'
+                    error: 'El sueldo del empleado debe ser mayor o igual a 0 y no puede ser negativo.'
                 });
             }
             sueldoFinal = Math.round((numSueldo + Number.EPSILON) * 100) / 100;
@@ -860,22 +860,19 @@ app.post('/api/catalogo-servicios', validacionesCatalogoServicio, async (req, re
         }
 
         const costoEntrada = costo_est !== undefined ? costo_est : (req.body?.costo !== undefined ? req.body?.costo : req.body?.COSTO_EST);
-        if (costoEntrada === undefined || costoEntrada === null || costoEntrada === '') {
-            return res.status(400).json({
-                exito: false,
-                error: 'El costo estándar del servicio es obligatorio y debe ser mayor a 0 ($0.00 no permitido porque no es gratis).'
-            });
+        let costoFinal = 0;
+        if (costoEntrada !== undefined && costoEntrada !== null && String(costoEntrada).trim() !== '') {
+            const numCosto = typeof costoEntrada === 'number'
+                ? costoEntrada
+                : parseFloat(costoEntrada);
+            if (isNaN(numCosto) || numCosto < 0) {
+                return res.status(400).json({ 
+                    exito: false, 
+                    error: 'El costo estándar debe ser un número mayor o igual a 0 y no puede ser negativo (RN-33).' 
+                });
+            }
+            costoFinal = Math.round((numCosto + Number.EPSILON) * 100) / 100;
         }
-        const numCosto = typeof costoEntrada === 'number'
-            ? costoEntrada
-            : parseFloat(costoEntrada);
-        if (isNaN(numCosto) || numCosto <= 0) {
-            return res.status(400).json({ 
-                exito: false, 
-                error: 'El costo estándar debe ser un número mayor a 0 ($0.00 no permitido porque no es gratis).' 
-            });
-        }
-        const costoFinal = Math.round((numCosto + Number.EPSILON) * 100) / 100;
 
         const descLimpia = desc_serv && typeof desc_serv === 'string' && desc_serv.trim() ? desc_serv.trim() : null;
 
@@ -914,35 +911,29 @@ app.post('/api/productos', async (req, res) => {
             return res.status(400).json({ exito: false, error: 'El proveedor es obligatorio.' });
         }
 
-        if (prec_pro === undefined || prec_pro === null || prec_pro === '') {
-            return res.status(400).json({
-                exito: false,
-                error: 'El precio del producto es obligatorio y debe ser mayor a 0 ($0.00 no permitido porque no es gratis).'
-            });
+        let precioFinal = 0;
+        if (prec_pro !== undefined && prec_pro !== null && String(prec_pro).trim() !== '') {
+            const numPrecio = parseFloat(prec_pro);
+            if (isNaN(numPrecio) || numPrecio < 0) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El precio del producto debe ser mayor o igual a 0 y no puede ser negativo (RN-16).'
+                });
+            }
+            precioFinal = Math.round((numPrecio + Number.EPSILON) * 100) / 100;
         }
-        const numPrecio = parseFloat(prec_pro);
-        if (isNaN(numPrecio) || numPrecio <= 0) {
-            return res.status(400).json({
-                exito: false,
-                error: 'El precio del producto debe ser mayor a 0 ($0.00 no permitido porque no es gratis).'
-            });
-        }
-        const precioFinal = Math.round((numPrecio + Number.EPSILON) * 100) / 100;
 
-        if (stock_pro === undefined || stock_pro === null || stock_pro === '') {
-            return res.status(400).json({
-                exito: false,
-                error: 'El stock del producto es obligatorio y debe ser un número entero mayor a 0.'
-            });
+        let stockFinal = 0;
+        if (stock_pro !== undefined && stock_pro !== null && String(stock_pro).trim() !== '') {
+            const numStock = Number(stock_pro);
+            if (isNaN(numStock) || !Number.isInteger(numStock) || numStock < 0) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El stock del producto debe ser un número entero mayor o igual a 0 (RN-17).'
+                });
+            }
+            stockFinal = numStock;
         }
-        const numStock = Number(stock_pro);
-        if (isNaN(numStock) || !Number.isInteger(numStock) || numStock <= 0) {
-            return res.status(400).json({
-                exito: false,
-                error: 'El stock del producto debe ser un número entero mayor a 0 (no se permite registrar productos con stock 0).'
-            });
-        }
-        const stockFinal = numStock;
 
         const provCheck = await pool.query(`SELECT COUNT(*) AS "total" FROM PROVEEDORES WHERE ID_PROV = $1`, [id_prov.trim()]);
         if (parseInt(provCheck.rows[0].total) === 0) {
@@ -1018,30 +1009,32 @@ const validacionesPlanta = [
         })
         .escape(),
     body('stock')
+        .optional({ nullable: true, checkFalsy: false })
         .custom((valor) => {
             if (valor === undefined || valor === null || valor === '') {
-                throw new Error('El stock de la planta es obligatorio y debe ser un número entero mayor a 0.');
+                return true;
             }
             if (contieneSqlOHtml(String(valor))) {
                 throw new Error('El stock de la planta contiene caracteres no permitidos.');
             }
             const n = Number(valor);
-            if (isNaN(n) || !Number.isInteger(n) || n <= 0) {
-                throw new Error('El stock de la planta debe ser un número entero mayor a 0 (no se permite registrar plantas con stock 0).');
+            if (isNaN(n) || !Number.isInteger(n) || n < 0) {
+                throw new Error('El stock de la planta debe ser un número entero mayor o igual a 0 (RN-17).');
             }
             return true;
         }),
     body('precio')
+        .optional({ nullable: true, checkFalsy: false })
         .custom((valor) => {
             if (valor === undefined || valor === null || valor === '') {
-                throw new Error('El precio de la planta es obligatorio y debe ser mayor a 0 ($0.00 no permitido porque no es gratis).');
+                return true;
             }
             if (contieneSqlOHtml(String(valor))) {
                 throw new Error('El precio de la planta contiene caracteres no permitidos.');
             }
             const n = parseFloat(valor);
-            if (isNaN(n) || n <= 0) {
-                throw new Error('El precio de la planta debe ser mayor a 0 ($0.00 no permitido porque no es gratis).');
+            if (isNaN(n) || n < 0) {
+                throw new Error('El precio de la planta debe ser mayor o igual a 0 (RN-16).');
             }
             return true;
         })
@@ -1078,35 +1071,29 @@ app.post('/api/plantas', validacionesPlanta, async (req, res) => {
         const tipoFinal = tipo && typeof tipo === 'string' && tipo.trim() ? tipo.trim() : null;
         const tamanoFinal = (tamano !== undefined && tamano !== null && tamano !== '') ? parseFloat(tamano) : null;
 
-        if (stock === undefined || stock === null || stock === '') {
-            return res.status(400).json({
-                exito: false,
-                error: 'El stock de la planta es obligatorio y debe ser un número entero mayor a 0.'
-            });
+        let stockFinal = 0;
+        if (stock !== undefined && stock !== null && String(stock).trim() !== '') {
+            const numStock = Number(stock);
+            if (isNaN(numStock) || !Number.isInteger(numStock) || numStock < 0) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El stock de la planta debe ser un número entero mayor o igual a 0 (RN-17).'
+                });
+            }
+            stockFinal = numStock;
         }
-        const numStock = Number(stock);
-        if (isNaN(numStock) || !Number.isInteger(numStock) || numStock <= 0) {
-            return res.status(400).json({
-                exito: false,
-                error: 'El stock de la planta debe ser un número entero mayor a 0 (no se permite registrar plantas con stock 0).'
-            });
-        }
-        const stockFinal = numStock;
 
-        if (precio === undefined || precio === null || precio === '') {
-            return res.status(400).json({
-                exito: false,
-                error: 'El precio de la planta es obligatorio y debe ser mayor a 0 ($0.00 no permitido porque no es gratis).'
-            });
+        let precioFinal = 0;
+        if (precio !== undefined && precio !== null && String(precio).trim() !== '') {
+            const numPrecio = parseFloat(precio);
+            if (isNaN(numPrecio) || numPrecio < 0) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El precio de la planta debe ser un número mayor o igual a 0 (RN-16).'
+                });
+            }
+            precioFinal = Math.round((numPrecio + Number.EPSILON) * 100) / 100;
         }
-        const numPrecio = parseFloat(precio);
-        if (isNaN(numPrecio) || numPrecio <= 0) {
-            return res.status(400).json({
-                exito: false,
-                error: 'El precio de la planta debe ser mayor a 0 ($0.00 no permitido porque no es gratis).'
-            });
-        }
-        const precioFinal = Math.round((numPrecio + Number.EPSILON) * 100) / 100;
 
         const provCheck = await pool.query(`SELECT COUNT(*) AS "total" FROM PROVEEDORES WHERE ID_PROV = $1`, [proveedor.trim()]);
         if (parseInt(provCheck.rows[0].total) === 0) {
@@ -1315,22 +1302,19 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
         const fechaNormalizada = normalizarFechaSQL(fechaEntrada) || new Date().toISOString().split('T')[0];
 
         const costoEntrada = costo !== undefined ? costo : (costo_serv !== undefined ? costo_serv : req.body?.costo_est);
-        if (costoEntrada === undefined || costoEntrada === null || costoEntrada === '') {
-            return res.status(400).json({ 
-                exito: false, 
-                error: 'El costo del servicio es obligatorio y debe ser mayor a 0 ($0.00 no permitido porque no es gratis).' 
-            });
+        let costoFinal = 0;
+        if (costoEntrada !== undefined && costoEntrada !== null && String(costoEntrada).trim() !== '') {
+            const numCosto = typeof costoEntrada === 'number'
+                ? costoEntrada
+                : parseFloat(String(costoEntrada).replace(/[^0-9.-]/g, ''));
+            if (isNaN(numCosto) || numCosto < 0) {
+                return res.status(400).json({ 
+                    exito: false, 
+                    error: 'El costo del servicio debe ser un número mayor o igual a 0 y no puede ser negativo (RN-33).' 
+                });
+            }
+            costoFinal = Math.round((numCosto + Number.EPSILON) * 100) / 100;
         }
-        const numCosto = typeof costoEntrada === 'number'
-            ? costoEntrada
-            : parseFloat(String(costoEntrada).replace(/[^0-9.-]/g, ''));
-        if (isNaN(numCosto) || numCosto <= 0) {
-            return res.status(400).json({ 
-                exito: false, 
-                error: 'El costo del servicio debe ser un número mayor a 0 ($0.00 no permitido porque no es gratis).' 
-            });
-        }
-        const costoFinal = Math.round((numCosto + Number.EPSILON) * 100) / 100;
 
         let clienteFinal = idCliEntrada && typeof idCliEntrada === 'string' && idCliEntrada.trim() ? idCliEntrada.trim() : null;
         if (!clienteFinal) {
@@ -3161,22 +3145,22 @@ app.put('/api/actualizar', async (req, res) => {
                     if (keyUpper.includes('PREC') || keyUpper.includes('COSTO') || keyUpper.includes('TOT') || keyUpper.includes('SUE') || keyUpper.includes('SALDO')) {
                         const numVal = parseFloat(valor);
                         if (!isNaN(numVal)) {
-                            if ((keyUpper.includes('PREC') || keyUpper.includes('COSTO') || keyUpper.includes('SUE')) && numVal <= 0) {
+                            if ((keyUpper.includes('PREC') || keyUpper.includes('COSTO') || keyUpper.includes('SUE')) && numVal < 0) {
                                 return res.status(400).json({
                                     exito: false,
-                                    error: `El campo ${key} debe ser mayor a 0 ($0.00 no permitido porque no es gratis).`
+                                    error: `El campo ${key} no puede ser un valor negativo (debe ser mayor o igual a 0).`
                                 });
                             }
                             valor = Math.round((numVal + Number.EPSILON) * 100) / 100;
                         }
                     }
-                    // Validación de stock mayor a 0
+                    // Validación de stock mayor o igual a 0
                     if (keyUpper.includes('STOCK')) {
                         const numStock = Number(valor);
-                        if (isNaN(numStock) || !Number.isInteger(numStock) || numStock <= 0) {
+                        if (isNaN(numStock) || !Number.isInteger(numStock) || numStock < 0) {
                             return res.status(400).json({
                                 exito: false,
-                                error: `El campo ${key} debe ser un número entero mayor a 0 (no se permiten existencias en 0).`
+                                error: `El campo ${key} debe ser un número entero mayor o igual a 0.`
                             });
                         }
                         valor = numStock;

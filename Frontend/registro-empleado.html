@@ -54,7 +54,7 @@
     <div class="container">
         <div class="card" style="max-width: 600px; margin: auto;">
             <h2>Alta de Nuevo Empleado</h2>
-            <form onsubmit="guardarEmpleado(event)">
+            <form novalidate onsubmit="guardarEmpleado(event)">
                 
                 <div class="form-group">
                     <label>Tipo de Empleado:</label>
@@ -167,11 +167,10 @@
 
             if (sueVal !== '') {
                 sueldoNum = parseFloat(sueVal);
-                // Validación de sueldo mayor a 0 (el sueldo no puede ser 0 pesos)
-                if (isNaN(sueldoNum) || sueldoNum <= 0) {
+                if (isNaN(sueldoNum) || sueldoNum < 0) {
                     esExito = false;
                     document.getElementById('tituloModal').innerText = "Valor Inválido";
-                    document.getElementById('textoModal').innerText = "El sueldo del empleado debe ser mayor a 0 ($0.00 no permitido).";
+                    document.getElementById('textoModal').innerText = "El sueldo del empleado debe ser mayor o igual a 0 y no puede ser negativo.";
                     document.getElementById('modalMensaje').style.display = 'flex';
                     return;
                 }

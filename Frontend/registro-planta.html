@@ -52,7 +52,7 @@
     <div class="container">
         <div class="card" style="max-width: 600px; margin: auto;">
             <h2>Alta de Nueva Planta</h2>
-            <form onsubmit="guardarPlanta(event)">
+            <form novalidate onsubmit="guardarPlanta(event)">
                 <div class="form-group">
                     <label>Tipo de Planta (Opcional):</label>
                     <input type="text" id="tipo" placeholder="Ej. Suculenta">
@@ -71,11 +71,11 @@
                 </div>
                 <div class="form-group">
                     <label>Stock Inicial:</label>
-                    <input type="number" id="stock" required min="1" step="1" placeholder="Ej. 10">
+                    <input type="number" id="stock" min="0" step="1" placeholder="Ej. 10">
                 </div>
                 <div class="form-group">
                     <label>Precio Unitario ($):</label>
-                    <input type="number" id="precio" required step="0.01" min="0.01" placeholder="Ej. 50.00">
+                    <input type="number" id="precio" step="0.01" min="0" placeholder="Ej. 50.00">
                 </div>
                 <div class="form-group">
                     <label>Proveedor:</label>
@@ -168,41 +168,31 @@
             const precioVal = document.getElementById('precio').value;
             const tamanoVal = document.getElementById('tamano').value;
 
-            // Validación de stock entero mayor a 0 (no se permite registrar stock 0)
-            if (stockVal === '' || stockVal === null || stockVal === undefined) {
-                esExito = false;
-                document.getElementById('tituloModal').innerText = "Validación";
-                document.getElementById('textoModal').innerText = "El stock inicial de la planta es obligatorio y debe ser un número entero mayor a 0.";
-                document.getElementById('modalMensaje').style.display = 'flex';
-                return;
+            let stockFinal = 0;
+            if (stockVal !== '' && stockVal !== null && stockVal !== undefined) {
+                const stockNum = Number(stockVal);
+                if (isNaN(stockNum) || !Number.isInteger(stockNum) || stockNum < 0) {
+                    esExito = false;
+                    document.getElementById('tituloModal').innerText = "Validación";
+                    document.getElementById('textoModal').innerText = "El stock de la planta debe ser un número entero mayor o igual a 0 (RN-17).";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
+                stockFinal = stockNum;
             }
-            const stockNum = Number(stockVal);
-            if (isNaN(stockNum) || !Number.isInteger(stockNum) || stockNum <= 0) {
-                esExito = false;
-                document.getElementById('tituloModal').innerText = "Validación";
-                document.getElementById('textoModal').innerText = "El stock de la planta debe ser un número entero mayor a 0 (no se permite registrar plantas con stock 0).";
-                document.getElementById('modalMensaje').style.display = 'flex';
-                return;
-            }
-            const stockFinal = stockNum;
 
-            // Validación de precio mayor a 0 (no se permiten plantas gratis a $0.00)
-            if (precioVal === '' || precioVal === null || precioVal === undefined) {
-                esExito = false;
-                document.getElementById('tituloModal').innerText = "Validación";
-                document.getElementById('textoModal').innerText = "El precio de la planta es obligatorio y debe ser mayor a 0 ($0.00 no permitido porque no es gratis).";
-                document.getElementById('modalMensaje').style.display = 'flex';
-                return;
+            let precioFinal = 0;
+            if (precioVal !== '' && precioVal !== null && precioVal !== undefined) {
+                const precioNum = parseFloat(precioVal);
+                if (isNaN(precioNum) || precioNum < 0) {
+                    esExito = false;
+                    document.getElementById('tituloModal').innerText = "Validación";
+                    document.getElementById('textoModal').innerText = "El precio de la planta debe ser mayor o igual a 0 y no puede ser negativo (RN-16).";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
+                precioFinal = Math.round((precioNum + Number.EPSILON) * 100) / 100;
             }
-            const precioNum = parseFloat(precioVal);
-            if (isNaN(precioNum) || precioNum <= 0) {
-                esExito = false;
-                document.getElementById('tituloModal').innerText = "Validación";
-                document.getElementById('textoModal').innerText = "El precio de la planta debe ser mayor a 0 ($0.00 no permitido porque no es gratis).";
-                document.getElementById('modalMensaje').style.display = 'flex';
-                return;
-            }
-            const precioFinal = Math.round((precioNum + Number.EPSILON) * 100) / 100;
 
             const tamanoFinal = tamanoVal !== '' ? parseFloat(tamanoVal) : null;
             const tipoFinal = document.getElementById('tipo').value.trim();
