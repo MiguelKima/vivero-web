@@ -180,6 +180,17 @@
 
             const curpVal = document.getElementById('curp_emp').value.trim();
 
+            if (curpVal) {
+                const regexCurp = /^[A-Z][AEIOUX][A-Z]{2}\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[HMX](?:AS|BC|BS|CC|CL|CM|CS|CH|DF|DG|GT|GR|HG|JC|MC|MN|MS|NT|NL|OC|PL|QT|QR|SP|SL|SR|TC|TS|TL|VZ|YN|ZS|NE)[B-DF-HJ-NP-TV-ZX]{3}[0-9A-J][0-9A-Z]$/i;
+                if (!regexCurp.test(curpVal)) {
+                    esExito = false;
+                    document.getElementById('tituloModal').innerText = "Formato de CURP Inválido";
+                    document.getElementById('textoModal').innerText = "La CURP debe tener exactamente 18 caracteres alfanuméricos y cumplir con la estructura oficial mexicana (ejemplo: ABCD000101HDFRND01).";
+                    document.getElementById('modalMensaje').style.display = 'flex';
+                    return;
+                }
+            }
+
             const datos = {
                 tip_emp: document.getElementById('tip_emp').value || null,
                 curp_emp: curpVal ? curpVal.toUpperCase() : null,

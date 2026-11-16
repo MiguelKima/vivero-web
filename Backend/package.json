@@ -4,7 +4,9 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node test-cu14.js",
+    "test:cu14": "node test-cu14.js"
   },
   "keywords": [],
   "author": "",

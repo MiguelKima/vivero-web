@@ -357,9 +357,12 @@ app.get('/api/empleados', async (req, res) => {
                 COALESCE(CURP_EMP, '') AS "CURP_EMP",
                 COALESCE(DIR_EMP, '') AS "DIR_EMP",
                 COALESCE(HOR_EMP, '') AS "HOR_EMP",
-                ROUND(CAST(GREATEST(COALESCE(SUE_EMP, 0), 0) AS NUMERIC), 2)::float AS "SUE_EMP"
+                CASE 
+                    WHEN SUE_EMP IS NULL THEN NULL 
+                    ELSE ROUND(CAST(GREATEST(SUE_EMP, 0) AS NUMERIC), 2)::float 
+                END AS "SUE_EMP"
             FROM EMPLEADOS
-            WHERE SUE_EMP >= 0
+            WHERE SUE_EMP IS NULL OR SUE_EMP >= 0
         `);
         res.json(result.rows);
     } catch (err) {
@@ -424,8 +427,7 @@ app.post('/api/proveedores', async (req, res) => {
             }
         }
 
-        const countResult = await pool.query('SELECT COUNT(*) AS "total" FROM PROVEEDORES');
-        const id_prov = 'PRV-' + String(parseInt(countResult.rows[0].total) + 1).padStart(3, '0');
+        const id_prov = await generarSiguienteId('PROVEEDORES', 'ID_PROV', 'PRV');
 
         await pool.query(`
             INSERT INTO PROVEEDORES (ID_PROV, TIP_SUM, NOM_PROV, RFC_PROV, DIR_PROV, CON_PROV, PRO_PROV)
@@ -443,6 +445,12 @@ app.post('/api/proveedores', async (req, res) => {
         res.json({ exito: true, mensaje: `Proveedor registrado con éxito (ID: ${id_prov})` });
     } catch (err) {
         console.error('Error al registrar proveedor:', err.message);
+        if (err.code === '23505') {
+            return res.status(500).json({ 
+                exito: false, 
+                error: 'No se pudo registrar porque el identificador generado ya existe en el sistema. Inténtalo de nuevo.' 
+            });
+        }
         res.status(500).json({ exito: false, error: 'Error al guardar el proveedor.' });
     }
 });
@@ -491,8 +499,7 @@ app.post('/api/clientes', async (req, res) => {
             return res.status(400).json({ exito: false, error: `El cliente "${nombreLimpio}" ya se encuentra registrado.` });
         }
 
-        const countResult = await pool.query('SELECT COUNT(*) AS "total" FROM CLIENTES');
-        const id_cli = 'CLI-' + String(parseInt(countResult.rows[0].total) + 1).padStart(3, '0');
+        const id_cli = await generarSiguienteId('CLIENTES', 'ID_CLI', 'CLI');
 
         const comLimpio = com_cli && com_cli.trim() ? sanitizarSqlYHtml(com_cli) : null;
         const prefLimpio = pref_cli && pref_cli.trim() ? sanitizarSqlYHtml(pref_cli) : null;
@@ -514,6 +521,12 @@ app.post('/api/clientes', async (req, res) => {
         res.json({ exito: true, mensaje: `Cliente registrado con éxito (ID: ${id_cli})` });
     } catch (err) {
         console.error('Error al registrar cliente:', err.message);
+        if (err.code === '23505') {
+            return res.status(500).json({ 
+                exito: false, 
+                error: 'No se pudo registrar porque el identificador generado ya existe en el sistema. Inténtalo de nuevo.' 
+            });
+        }
         res.status(500).json({ exito: false, error: 'Error al guardar el cliente.' });
     }
 });
@@ -572,6 +585,37 @@ async function verificarAccesoAdmin(req, res) {
     return true;
 }
 
+// Generar el siguiente ID sin colisiones (E1): MAX + 1 con bucle,
+// nunca COUNT(*) + 1, porque COUNT no coincide con el máximo si hay huecos.
+async function generarSiguienteId(tabla, columnaId, prefijo) {
+    const res = await pool.query(
+        `SELECT TRIM(${columnaId}) AS "id" FROM ${tabla} WHERE ${columnaId} IS NOT NULL`
+    );
+    let maxId = 0;
+    for (const row of res.rows) {
+        const rawId = row.id || (row && Object.values(row)[0]);
+        if (rawId) {
+            const match = String(rawId).match(/(\d+)/);
+            if (match) {
+                const num = parseInt(match[1], 10);
+                if (!isNaN(num) && num > maxId) maxId = num;
+            }
+        }
+    }
+    let nextNum = maxId + 1;
+    let id = prefijo + '-' + String(nextNum).padStart(3, '0');
+    // Bucle anti-colisión: por si otro registro se creó entre el SELECT y el INSERT.
+    while (true) {
+        const check = await pool.query(
+            `SELECT COUNT(*) AS "total" FROM ${tabla} WHERE TRIM(${columnaId}) = TRIM($1)`,
+            [id]
+        );
+        if (parseInt(check.rows[0]?.total, 10) === 0) return id;
+        nextNum++;
+        id = prefijo + '-' + String(nextNum).padStart(3, '0');
+    }
+}
+
 // Sistema de Auditoría y Bitácora de Operaciones de Usuarios (N9)
 async function registrarAuditoria(req, accion, idUsuarioAfectado, datosAnteriores, datosNuevos) {
     try {
@@ -596,6 +640,8 @@ async function registrarAuditoria(req, accion, idUsuarioAfectado, datosAnteriore
 
 // Empleados (CU-13 / CU-14 / CU-15 / CU-16 / CU-17 / CU-18 / RN-12 / RN-15 / RN-16 / RN-19 / RN-34 / RN-35)
 app.post('/api/empleados', async (req, res) => {
+    let curpLimpio = null;
+
     try {
         const tienePermiso = await verificarAccesoAdmin(req, res);
         if (!tienePermiso) return;
@@ -629,17 +675,32 @@ app.post('/api/empleados', async (req, res) => {
             sueldoFinal = Math.round((numSueldo + Number.EPSILON) * 100) / 100;
         }
 
-        const curpLimpio = curp_emp && typeof curp_emp === 'string' && curp_emp.trim() ? curp_emp.trim().toUpperCase() : null;
+        curpLimpio = curp_emp && typeof curp_emp === 'string' && curp_emp.trim() ? curp_emp.trim().toUpperCase() : null;
 
         if (curpLimpio) {
+            // Validación de formato oficial de CURP (18 caracteres alfanuméricos - CU-14)
+            // Caracteres 1-4: 1ra letra y vocal interna del 1er apellido, 1ra letra del 2do apellido y 1ra letra del primer nombre
+            // Caracteres 5-10: Fecha de nacimiento AAMMDD
+            // Carácter 11: Sexo (H, M o X para no binario)
+            // Caracteres 12-13: Código de entidad federativa (32 estados o NE para extranjero)
+            // Caracteres 14-16: 1ra consonante interna del 1er apellido, 2do apellido y primer nombre
+            // Carácter 17: Homoclave (0-9 para < 2000, A-J para >= 2000)
+            // Carácter 18: Dígito verificador
+            const regexCurp = /^[A-Z][AEIOUX][A-Z]{2}\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[HMX](?:AS|BC|BS|CC|CL|CM|CS|CH|DF|DG|GT|GR|HG|JC|MC|MN|MS|NT|NL|OC|PL|QT|QR|SP|SL|SR|TC|TS|TL|VZ|YN|ZS|NE)[B-DF-HJ-NP-TV-ZX]{3}[0-9A-J][0-9A-Z]$/;
+            if (!regexCurp.test(curpLimpio)) {
+                return res.status(400).json({
+                    exito: false,
+                    error: 'El formato de la CURP es inválido. Debe contener exactamente 18 caracteres alfanuméricos según el formato oficial mexicano (ejemplo: ABCD000101HDFRND01).'
+                });
+            }
+
             const check = await pool.query(`SELECT COUNT(*) AS "total" FROM EMPLEADOS WHERE UPPER(CURP_EMP) = $1`, [curpLimpio]);
             if (parseInt(check.rows[0].total) > 0) {
                 return res.status(400).json({ exito: false, error: `El empleado con CURP "${curpLimpio}" ya está registrado.` });
             }
         }
 
-        const countResult = await pool.query('SELECT COUNT(*) AS "total" FROM EMPLEADOS');
-        const id_emp = 'EMP-' + String(parseInt(countResult.rows[0].total) + 1).padStart(3, '0');
+        const id_emp = await generarSiguienteId('EMPLEADOS', 'ID_EMP', 'EMP');
 
         await pool.query(`
             INSERT INTO EMPLEADOS (ID_EMP, TIP_EMP, CURP_EMP, NOM_EMP, DIR_EMP, PUE_EMP, HOR_EMP, SUE_EMP, INI_ALTA, FIN_ALTA)
@@ -658,6 +719,12 @@ app.post('/api/empleados', async (req, res) => {
         res.json({ exito: true, mensaje: `Empleado registrado con éxito (ID: ${id_emp})` });
     } catch (err) {
         console.error('Error al registrar empleado:', err.message);
+        if (err.code === '23505') {
+            return res.status(500).json({ 
+                exito: false, 
+                error: 'No se pudo registrar porque el identificador generado ya existe en el sistema. Inténtalo de nuevo.' 
+            });
+        }
         res.status(500).json({ exito: false, error: 'Error al guardar el empleado.' });
     }
 });
@@ -760,8 +827,7 @@ app.post('/api/catalogo-servicios', validacionesCatalogoServicio, async (req, re
             return res.status(400).json({ exito: false, error: `El servicio "${nombreLimpio}" ya existe en el catálogo.` });
         }
 
-        const countResult = await pool.query('SELECT COUNT(*) AS "total" FROM CAT_SERVICIOS');
-        const id_cat = 'CSV-' + String(parseInt(countResult.rows[0].total) + 1).padStart(3, '0');
+        const id_cat = await generarSiguienteId('CAT_SERVICIOS', 'ID_CAT_SERV', 'CSV');
 
         await pool.query(`
             INSERT INTO CAT_SERVICIOS (ID_CAT_SERV, NOM_SERV, DESC_SERV, COSTO_EST)
@@ -771,6 +837,12 @@ app.post('/api/catalogo-servicios', validacionesCatalogoServicio, async (req, re
         res.json({ exito: true, mensaje: `Servicio agregado al catálogo con éxito (ID: ${id_cat})` });
     } catch (err) {
         console.error('Error al guardar en catálogo:', err.message);
+        if (err.code === '23505') {
+            return res.status(500).json({ 
+                exito: false, 
+                error: 'No se pudo registrar porque el identificador generado ya existe en el sistema. Inténtalo de nuevo.' 
+            });
+        }
         res.status(500).json({ exito: false, error: 'Ocurrió un error en el servidor al intentar registrar el servicio en el catálogo.' });
     }
 });
@@ -839,8 +911,7 @@ app.post('/api/productos', async (req, res) => {
             return res.status(400).json({ exito: false, error: `El producto "${descripcionLimpia}" ya existe en el inventario.` });
         }
 
-        const countResult = await pool.query('SELECT COUNT(*) AS "total" FROM PRODUCTOS');
-        const id_pro = 'PRO-' + String(parseInt(countResult.rows[0].total) + 1).padStart(3, '0');
+        const id_pro = await generarSiguienteId('PRODUCTOS', 'ID_PRO', 'PRO');
 
         await pool.query(`
             INSERT INTO PRODUCTOS (ID_PRO, TIP_PRO, DESC_PRO, STOCK_PRO, PREC_PRO, ID_PROV)
@@ -850,6 +921,12 @@ app.post('/api/productos', async (req, res) => {
         res.json({ exito: true, mensaje: `Producto registrado con éxito (ID: ${id_pro})` });
     } catch (err) {
         console.error('Error al registrar producto:', err.message);
+        if (err.code === '23505') {
+            return res.status(500).json({ 
+                exito: false, 
+                error: 'No se pudo registrar porque el identificador generado ya existe en el sistema. Inténtalo de nuevo.' 
+            });
+        }
         res.status(500).json({ exito: false, error: 'Error al guardar el producto.' });
     }
 });
@@ -1001,8 +1078,7 @@ app.post('/api/plantas', validacionesPlanta, async (req, res) => {
             return res.status(400).json({ exito: false, error: `La planta "${cientificoLimpio}" ya se encuentra registrada.` });
         }
 
-        const countResult = await pool.query('SELECT COUNT(*) AS "total" FROM PLANTAS');
-        const id_planta = 'PLN-' + String(parseInt(countResult.rows[0].total) + 1).padStart(3, '0');
+        const id_planta = await generarSiguienteId('PLANTAS', 'ID_PLANTA', 'PLN');
 
         await pool.query(`
             INSERT INTO PLANTAS (ID_PLANTA, TIP_PLANTA, NOM_CTFO, NOM_COM, TAM_PLANT, STOCK_PLANT, PROV_PLANT, PREC_PLANTA)
@@ -1021,6 +1097,12 @@ app.post('/api/plantas', validacionesPlanta, async (req, res) => {
         res.json({ exito: true, mensaje: `Planta registrada con éxito (ID: ${id_planta})` });
     } catch (err) {
         console.error('Error al registrar planta:', err.message);
+        if (err.code === '23505') {
+            return res.status(500).json({ 
+                exito: false, 
+                error: 'No se pudo registrar porque el identificador generado ya existe en el sistema. Inténtalo de nuevo.' 
+            });
+        }
         res.status(500).json({ exito: false, error: 'Error al guardar la planta.' });
     }
 });
@@ -1717,9 +1799,12 @@ app.get('/api/dashboard/empleados', async (req, res) => {
                 COALESCE(DIR_EMP, '') AS "DIR_EMP", 
                 COALESCE(PUE_EMP, '') AS "PUE_EMP", 
                 COALESCE(HOR_EMP, '') AS "HOR_EMP", 
-                ROUND(CAST(GREATEST(COALESCE(SUE_EMP, 0), 0) AS NUMERIC), 2)::float AS "SUE_EMP" 
+                CASE 
+                    WHEN SUE_EMP IS NULL THEN NULL 
+                    ELSE ROUND(CAST(GREATEST(SUE_EMP, 0) AS NUMERIC), 2)::float 
+                END AS "SUE_EMP" 
             FROM EMPLEADOS
-            WHERE SUE_EMP >= 0
+            WHERE SUE_EMP IS NULL OR SUE_EMP >= 0
         `);
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
@@ -2384,8 +2469,22 @@ app.put('/api/empleados/:id', async (req, res) => {
             values.push(tip_emp_val && String(tip_emp_val).trim() ? String(tip_emp_val).trim() : null);
         }
         if (curp_emp_val !== undefined) {
+            const curpValLimpia = curp_emp_val && String(curp_emp_val).trim() ? String(curp_emp_val).trim().toUpperCase() : null;
+            if (curpValLimpia) {
+                const regexCurp = /^[A-Z][AEIOUX][A-Z]{2}\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[HMX](?:AS|BC|BS|CC|CL|CM|CS|CH|DF|DG|GT|GR|HG|JC|MC|MN|MS|NT|NL|OC|PL|QT|QR|SP|SL|SR|TC|TS|TL|VZ|YN|ZS|NE)[B-DF-HJ-NP-TV-ZX]{3}[0-9A-J][0-9A-Z]$/;
+                if (!regexCurp.test(curpValLimpia)) {
+                    return res.status(400).json({
+                        exito: false,
+                        error: 'El formato de la CURP es inválido. Debe contener exactamente 18 caracteres alfanuméricos según el formato oficial mexicano (ejemplo: ABCD000101HDFRND01).'
+                    });
+                }
+                const checkCurp = await pool.query('SELECT COUNT(*) AS "total" FROM EMPLEADOS WHERE UPPER(CURP_EMP) = $1 AND ID_EMP <> $2', [curpValLimpia, id_emp]);
+                if (parseInt(checkCurp.rows[0]?.total, 10) > 0) {
+                    return res.status(400).json({ exito: false, error: `El empleado con CURP "${curpValLimpia}" ya está registrado.` });
+                }
+            }
             updates.push(`CURP_EMP = $${paramIdx++}`);
-            values.push(curp_emp_val && String(curp_emp_val).trim() ? String(curp_emp_val).trim() : null);
+            values.push(curpValLimpia);
         }
         if (dir_emp_val !== undefined) {
             updates.push(`DIR_EMP = $${paramIdx++}`);
@@ -2932,6 +3031,38 @@ app.put('/api/actualizar', async (req, res) => {
                         exito: false,
                         error: 'El nombre del empleado no puede exceder los 150 caracteres (NOM_EMP VARCHAR(150)).'
                     });
+                }
+            }
+        }
+
+        // Validación de CURP para EMPLEADOS (CU-14)
+        if (tabla.toUpperCase() === 'EMPLEADOS' || Object.keys(campos || {}).some(k => k.toUpperCase() === 'CURP_EMP')) {
+            const rawCurp = campos?.['CURP_EMP'] !== undefined ? campos['CURP_EMP'] : campos?.['curp_emp'];
+            if (rawCurp !== undefined && rawCurp !== null && String(rawCurp).trim() !== '') {
+                const curpLimpio = String(rawCurp).trim().toUpperCase();
+                const regexCurp = /^[A-Z][AEIOUX][A-Z]{2}\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[HMX](?:AS|BC|BS|CC|CL|CM|CS|CH|DF|DG|GT|GR|HG|JC|MC|MN|MS|NT|NL|OC|PL|QT|QR|SP|SL|SR|TC|TS|TL|VZ|YN|ZS|NE)[B-DF-HJ-NP-TV-ZX]{3}[0-9A-J][0-9A-Z]$/;
+                if (!regexCurp.test(curpLimpio)) {
+                    return res.status(400).json({
+                        exito: false,
+                        error: 'El formato de la CURP es inválido. Debe contener exactamente 18 caracteres alfanuméricos según el formato oficial mexicano (ejemplo: ABCD000101HDFRND01).'
+                    });
+                }
+                const checkCurp = await pool.query(`
+                    SELECT COUNT(*) AS "total" FROM EMPLEADOS 
+                    WHERE UPPER(CURP_EMP) = $1 AND ${idColumn} != $2
+                `, [curpLimpio, String(idValue)]);
+                if (parseInt(checkCurp.rows[0].total) > 0) {
+                    return res.status(400).json({
+                        exito: false,
+                        error: `El empleado con CURP "${curpLimpio}" ya está registrado.`
+                    });
+                }
+                for (const k of Object.keys(campos)) {
+                    if (k.toUpperCase() === 'CURP_EMP') campos[k] = curpLimpio;
+                }
+            } else if (rawCurp !== undefined) {
+                for (const k of Object.keys(campos)) {
+                    if (k.toUpperCase() === 'CURP_EMP') campos[k] = null;
                 }
             }
         }
@@ -3535,6 +3666,75 @@ app.get('/api/mantenimiento/migrar-contrasenas', async (req, res) => {
     try {
         const resultado = await migrarContrasenasTextoPlano();
         res.json({ exito: true, mensaje: 'Migración de contraseñas a hashes ejecutada.', completado: resultado });
+    } catch (e) {
+        res.status(500).json({ exito: false, error: e.message });
+    }
+});
+
+// Prueba de verificación CU-14: Crear dos empleados sin CURP seguidos debe funcionar y ambos deben quedar con CURP NULL
+async function ejecutarPruebaCU14() {
+    let emp1Id = null;
+    let emp2Id = null;
+    try {
+        const nom1 = `Test_CU14_A_${Date.now()}`;
+        const nom2 = `Test_CU14_B_${Date.now() + 1}`;
+
+        // 1. Primer empleado sin CURP
+        emp1Id = await generarSiguienteId('EMPLEADOS', 'ID_EMP', 'EMP');
+        await pool.query(`
+            INSERT INTO EMPLEADOS (ID_EMP, NOM_EMP, CURP_EMP, INI_ALTA, FIN_ALTA)
+            VALUES ($1, $2, NULL, NOW(), '2099-12-31')
+        `, [emp1Id, nom1]);
+
+        // 2. Segundo empleado sin CURP seguido
+        emp2Id = await generarSiguienteId('EMPLEADOS', 'ID_EMP', 'EMP');
+        await pool.query(`
+            INSERT INTO EMPLEADOS (ID_EMP, NOM_EMP, CURP_EMP, INI_ALTA, FIN_ALTA)
+            VALUES ($1, $2, NULL, NOW(), '2099-12-31')
+        `, [emp2Id, nom2]);
+
+        // 3. Verificar que ambos existen y ambos tienen CURP_EMP en NULL
+        const checkRes = await pool.query('SELECT ID_EMP, NOM_EMP, CURP_EMP FROM EMPLEADOS WHERE ID_EMP IN ($1, $2)', [emp1Id, emp2Id]);
+        const e1 = checkRes.rows.find(r => r.ID_EMP && r.ID_EMP.trim() === emp1Id);
+        const e2 = checkRes.rows.find(r => r.ID_EMP && r.ID_EMP.trim() === emp2Id);
+
+        const e1Valido = e1 && e1.CURP_EMP === null;
+        const e2Valido = e2 && e2.CURP_EMP === null;
+        const sonDistintos = emp1Id !== emp2Id;
+
+        // Limpiar registros de prueba
+        await pool.query('DELETE FROM EMPLEADOS WHERE ID_EMP IN ($1, $2)', [emp1Id, emp2Id]);
+
+        if (e1Valido && e2Valido && sonDistintos) {
+            return {
+                exito: true,
+                mensaje: `Prueba CU-14 superada: Se crearon dos empleados consecutivos (${emp1Id} y ${emp2Id}) sin CURP exitosamente y ambos quedaron con CURP NULL sin colisiones.`,
+                empleado1: { id: emp1Id, curp: null },
+                empleado2: { id: emp2Id, curp: null }
+            };
+        } else {
+            return {
+                exito: false,
+                error: `Falla en prueba CU-14: e1=${JSON.stringify(e1)}, e2=${JSON.stringify(e2)}`
+            };
+        }
+    } catch (err) {
+        if (emp1Id || emp2Id) {
+            try {
+                await pool.query('DELETE FROM EMPLEADOS WHERE ID_EMP IN ($1, $2)', [emp1Id, emp2Id]);
+            } catch (cleanupErr) {}
+        }
+        return {
+            exito: false,
+            error: 'Error en prueba CU-14: ' + err.message
+        };
+    }
+}
+
+app.get('/api/test/cu-14', async (req, res) => {
+    try {
+        const resultado = await ejecutarPruebaCU14();
+        res.status(resultado.exito ? 200 : 500).json(resultado);
     } catch (e) {
         res.status(500).json({ exito: false, error: e.message });
     }
