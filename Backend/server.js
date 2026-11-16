@@ -3355,12 +3355,81 @@ async function procesarEliminacion(req, res, tabla, idColumn, idValue) {
         } catch (e) {}
     }
 
+    // Consultar datos de la venta para restaurar stock al eliminar (E20)
+    let ventaParaRestaurar = null;
+    if (tablaUpper === 'VENTAS') {
+        try {
+            const vCheck = await pool.query(`SELECT * FROM VENTAS WHERE TRIM(${col}) = TRIM($1)`, [idStr]);
+            ventaParaRestaurar = vCheck.rows[0] || null;
+        } catch (e) {
+            console.error('Aviso al consultar datos de venta antes de eliminar (E20):', e.message);
+        }
+    }
+
     try {
         const deleteQuery = `DELETE FROM ${tabla} WHERE TRIM(${col}) = TRIM($1)`;
         const delRes = await pool.query(deleteQuery, [idStr]);
 
         if (delRes.rowCount === 0) {
             return res.status(404).json({ exito: false, error: `No se encontró el registro "${idStr}" en la tabla "${tabla}".` });
+        }
+
+        // Si se eliminó una venta exitosamente, restaurar stock de productos y plantas vendidos (E20)
+        if (tablaUpper === 'VENTAS' && ventaParaRestaurar) {
+            try {
+                // 1. Restaurar stock de producto si la venta incluía producto
+                const idProd = (ventaParaRestaurar.ID_PRO || ventaParaRestaurar.id_pro || '').trim();
+                if (idProd && idProd.toUpperCase() !== 'N/A' && idProd.toUpperCase() !== 'NULL') {
+                    let cantProd = 1;
+                    for (const k of ['NUM_CAN', 'num_can', 'CANT_PRO', 'cant_pro', 'CANT_PRODUCTO', 'cant_producto', 'NUM_CAN_PRO', 'num_can_pro', 'CANTIDAD', 'cantidad']) {
+                        if (ventaParaRestaurar[k] !== undefined && ventaParaRestaurar[k] !== null && String(ventaParaRestaurar[k]).trim() !== '') {
+                            const n = parseInt(ventaParaRestaurar[k], 10);
+                            if (!isNaN(n) && n > 0) {
+                                cantProd = n;
+                                break;
+                            }
+                        }
+                    }
+                    await pool.query(
+                        'UPDATE PRODUCTOS SET STOCK_PRO = COALESCE(STOCK_PRO, 0) + $1 WHERE TRIM(ID_PRO) = TRIM($2)',
+                        [cantProd, idProd]
+                    );
+                    console.log(`[E20] Stock restaurado para producto ${idProd}: +${cantProd} tras eliminar venta ${idStr}`);
+                }
+
+                // 2. Restaurar stock de planta si la venta incluía planta
+                const idPlanta = (ventaParaRestaurar.ID_PLANTA || ventaParaRestaurar.id_planta || '').trim();
+                if (idPlanta && idPlanta.toUpperCase() !== 'N/A' && idPlanta.toUpperCase() !== 'NULL') {
+                    let cantPlanta = 1;
+                    for (const k of ['NUM_CAN_PLANT', 'num_can_plant', 'CANT_PLANTA', 'cant_planta', 'CANT_PLANT', 'cant_plant', 'NUM_CAN_PLANTA', 'num_can_planta']) {
+                        if (ventaParaRestaurar[k] !== undefined && ventaParaRestaurar[k] !== null && String(ventaParaRestaurar[k]).trim() !== '') {
+                            const n = parseInt(ventaParaRestaurar[k], 10);
+                            if (!isNaN(n) && n > 0) {
+                                cantPlanta = n;
+                                break;
+                            }
+                        }
+                    }
+                    if ((!idProd || idProd.toUpperCase() === 'N/A' || idProd.toUpperCase() === 'NULL') && cantPlanta === 1) {
+                        for (const k of ['CANTIDAD', 'cantidad']) {
+                            if (ventaParaRestaurar[k] !== undefined && ventaParaRestaurar[k] !== null && String(ventaParaRestaurar[k]).trim() !== '') {
+                                const n = parseInt(ventaParaRestaurar[k], 10);
+                                if (!isNaN(n) && n > 0) {
+                                    cantPlanta = n;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    await pool.query(
+                        'UPDATE PLANTAS SET STOCK_PLANT = COALESCE(STOCK_PLANT, 0) + $1 WHERE TRIM(ID_PLANTA) = TRIM($2)',
+                        [cantPlanta, idPlanta]
+                    );
+                    console.log(`[E20] Stock restaurado para planta ${idPlanta}: +${cantPlanta} tras eliminar venta ${idStr}`);
+                }
+            } catch (stockErr) {
+                console.error('[E20] Error al restaurar stock de venta eliminada:', stockErr.message);
+            }
         }
 
         if (tablaUpper === 'USUARIOS') {
