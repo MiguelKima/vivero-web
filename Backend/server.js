@@ -1,5 +1,6 @@
+require('dotenv').config();
 const express = require('express');
-const sql = require('mssql');
+const { Pool } = require('pg');
 const cors = require('cors');
 const path = require('path');
 
@@ -138,17 +139,13 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(frontPath, 'login.html'));
 });
 
-const dbConfig = {
-    server: 'vivero-server-miguel.database.windows.net',
-    port: 1433,
-    database: 'ViveroDB',
-    user: 'adminvivero',
-    password: 'Miguel03',
-    options: {
-        encrypt: true,
-        trustServerCertificate: true
+// Configuración de PostgreSQL (Supabase)
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+        rejectUnauthorized: false
     }
-};
+});
 
 // --- API BACKEND ---
 
@@ -2527,9 +2524,12 @@ app.put('/api/actualizar', async (req, res) => {
 app.listen(3000, async () => {
     console.log('Servidor corriendo en http://localhost:3000');
     try {
-        await sql.connect(dbConfig);
-        console.log('Conexión exitosa a SQL Server en la nube (Azure)');
+        if (process.env.DATABASE_URL) {
+            const client = await pool.connect();
+            console.log('Conexión exitosa a PostgreSQL (Supabase)');
+            client.release();
+        }
     } catch (err) {
-        console.error('Error conectando a SQL en la nube:', err);
+        console.error('Error conectando a PostgreSQL:', err.message);
     }
 });
