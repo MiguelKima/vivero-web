@@ -423,6 +423,29 @@ app.get('/api/productos', async (req, res) => {
     }
 });
 
+// Obtener Servicios (E3)
+app.get('/api/servicios', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT 
+                ID_SERV AS "ID_SERV", 
+                ID_CLI AS "ID_CLI", 
+                TRAB_REAL AS "TRAB_REAL", 
+                CASE 
+                    WHEN COSTO_SERV IS NULL THEN NULL 
+                    ELSE ROUND(CAST(GREATEST(COSTO_SERV, 0) AS NUMERIC), 2)::float 
+                END AS "COSTO_SERV" 
+            FROM SERVICIOS 
+            WHERE COSTO_SERV IS NULL OR COSTO_SERV >= 0
+            ORDER BY ID_SERV
+        `);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error al obtener servicios:', err.message);
+        res.status(500).json({ error: 'Error al obtener servicios' });
+    }
+});
+
 // Proveedores (CU-9 / RN-14: Solo NOM_PROV es obligatorio, RFC único solo si se proporciona)
 app.post('/api/proveedores', async (req, res) => {
     try {
@@ -1868,6 +1891,7 @@ app.get('/api/dashboard/servicios', async (req, res) => {
                 END AS "COSTO_SERV" 
             FROM SERVICIOS 
             WHERE COSTO_SERV IS NULL OR COSTO_SERV >= 0
+            ORDER BY ID_SERV
         `);
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: 'Error' }); }
