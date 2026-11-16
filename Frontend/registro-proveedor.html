@@ -52,7 +52,7 @@
     <div class="container">
         <div class="card" style="max-width: 600px; margin: auto;">
             <h2>Alta de Nuevo Proveedor</h2>
-            <form onsubmit="guardarProveedor(event)">
+            <form novalidate onsubmit="guardarProveedor(event)">
                 <div class="form-group">
                     <label>Tipo de Suministro:</label>
                     <input type="text" id="tip_sum" placeholder="Ej. Fertilizantes, Herramientas...">
@@ -129,10 +129,24 @@
     <script>
         let esExito = false;
 
+        function esNombreValido(str) {
+            if (!str || typeof str !== 'string') return false;
+            const limpio = str.trim();
+            if (limpio.length < 2) return false;
+            const letras = limpio.match(/[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ]/g);
+            return (letras ? letras.length : 0) >= 2;
+        }
+
         function guardarProveedor(event) {
             event.preventDefault();
             const nom_prov = document.getElementById('nom_prov').value.trim();
-            if (!nom_prov) return;
+            if (!nom_prov || !esNombreValido(nom_prov)) {
+                esExito = false;
+                document.getElementById('tituloModal').innerText = "Validación";
+                document.getElementById('textoModal').innerText = "El nombre del proveedor es obligatorio, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).";
+                document.getElementById('modalMensaje').style.display = 'flex';
+                return;
+            }
 
             const datos = {
                 tip_sum: document.getElementById('tip_sum').value.trim() || null,

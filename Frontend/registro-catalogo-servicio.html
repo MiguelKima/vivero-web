@@ -103,6 +103,14 @@
             return regexSql.test(valor) || regexHtml.test(valor);
         }
 
+        function esNombreValido(str) {
+            if (!str || typeof str !== 'string') return false;
+            const limpio = str.trim();
+            if (limpio.length < 2) return false;
+            const letras = limpio.match(/[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ]/g);
+            return (letras ? letras.length : 0) >= 2;
+        }
+
         function guardarCatalogo(event) {
             event.preventDefault();
 
@@ -112,10 +120,10 @@
             const desc_serv = (descServRaw || '').trim();
             const costoEstRaw = document.getElementById('costo_est').value;
 
-            // Validación de campo obligatorio con trim() (CU-38 / RN-12: NOM_SERV NOT NULL)
-            if (!nom_serv) {
+            // Validación de campo obligatorio con trim() (CU-38 / RN-12: NOM_SERV NOT NULL / E15)
+            if (!nom_serv || !esNombreValido(nom_serv)) {
                 document.getElementById('tituloModal').innerText = "Aviso";
-                document.getElementById('textoModal').innerText = "El nombre del servicio es obligatorio y no puede estar vacío ni contener solo espacios (RN-12).";
+                document.getElementById('textoModal').innerText = "El nombre del servicio es obligatorio, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (RN-12 / E15).";
                 document.getElementById('modalMensaje').style.display = 'flex';
                 return;
             }

@@ -83,7 +83,7 @@
     <div class="container">
         <div class="card" style="max-width: 600px; margin: auto;">
             <h2>Alta de Nuevo Cliente</h2>
-            <form onsubmit="guardarCliente(event)">
+            <form novalidate onsubmit="guardarCliente(event)">
                 <div class="form-group">
                     <label>Nombre del Cliente:</label>
                     <input type="text" id="nom_cli" required placeholder="Ej. Maria Lopez">
@@ -199,15 +199,23 @@
             }
         });
 
+        function esNombreValido(str) {
+            if (!str || typeof str !== 'string') return false;
+            const limpio = str.trim();
+            if (limpio.length < 2) return false;
+            const letras = limpio.match(/[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ]/g);
+            return (letras ? letras.length : 0) >= 2;
+        }
+
         function guardarCliente(event) {
             event.preventDefault();
             const nom_cli = document.getElementById('nom_cli').value.trim();
             const cor_cli = document.getElementById('cor_cli').value.trim();
 
-            if (!nom_cli) {
+            if (!nom_cli || !esNombreValido(nom_cli)) {
                 esExito = false;
                 document.getElementById('tituloModal').innerText = "Validación";
-                document.getElementById('textoModal').innerText = "El nombre del cliente es obligatorio y no puede estar vacío ni contener solo espacios.";
+                document.getElementById('textoModal').innerText = "El nombre del cliente es obligatorio, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).";
                 document.getElementById('modalMensaje').style.display = 'flex';
                 return;
             }

@@ -482,14 +482,27 @@ function responderErrorPostgres(res, err, idPropuesto, mensajePorDefecto, logPre
     return res.status(500).json({ exito: false, error: mensajePorDefecto });
 }
 
+// Validador compartido para nombres y descripciones (E15 / N1):
+// Mínimo 2 caracteres y contener al menos 2 letras (a-z, A-Z, con acentos y ñ)
+function esNombreValido(str) {
+    if (!str || typeof str !== 'string') return false;
+    const limpio = str.trim();
+    if (limpio.length < 2) return false;
+    const letras = limpio.match(/[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ]/g);
+    return (letras ? letras.length : 0) >= 2;
+}
+
 // Proveedores (CU-9 / RN-14: Solo NOM_PROV es obligatorio, RFC único solo si se proporciona)
 app.post('/api/proveedores', async (req, res) => {
     let id_prov = null;
     try {
         const { tip_sum, nom_prov, rfc_prov, dir_prov, con_prov, pro_prov } = req.body || {};
 
-        if (!nom_prov || !nom_prov.trim()) {
-            return res.status(400).json({ exito: false, error: 'El nombre del proveedor es obligatorio.' });
+        if (!nom_prov || typeof nom_prov !== 'string' || !nom_prov.trim() || !esNombreValido(nom_prov)) {
+            return res.status(400).json({ 
+                exito: false, 
+                error: 'El nombre del proveedor es obligatorio, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' 
+            });
         }
 
         const rfcLimpio = rfc_prov && rfc_prov.trim() ? rfc_prov.trim() : null;
@@ -529,10 +542,10 @@ app.post('/api/clientes', async (req, res) => {
     try {
         const { nom_cli, dir_cli, tel_cli, cor_cli, com_cli, pref_cli } = req.body || {};
 
-        if (!nom_cli || typeof nom_cli !== 'string' || !nom_cli.trim()) {
+        if (!nom_cli || typeof nom_cli !== 'string' || !nom_cli.trim() || !esNombreValido(nom_cli)) {
             return res.status(400).json({ 
                 exito: false, 
-                error: 'El nombre del cliente es obligatorio y no puede estar compuesto solo por espacios vacíos.' 
+                error: 'El nombre del cliente es obligatorio, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' 
             });
         }
 
@@ -710,10 +723,10 @@ app.post('/api/empleados', async (req, res) => {
         if (!tienePermiso) return;
         const { tip_emp, curp_emp, nom_emp, dir_emp, pue_emp, hor_emp, sue_emp } = req.body || {};
 
-        if (!nom_emp || typeof nom_emp !== 'string' || !nom_emp.trim()) {
+        if (!nom_emp || typeof nom_emp !== 'string' || !nom_emp.trim() || !esNombreValido(nom_emp)) {
             return res.status(400).json({ 
                 exito: false, 
-                error: 'El nombre del empleado es obligatorio y no puede estar compuesto solo por espacios vacíos.' 
+                error: 'El nombre del empleado es obligatorio, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' 
             });
         }
 
@@ -726,7 +739,7 @@ app.post('/api/empleados', async (req, res) => {
             });
         }
 
-        let sueldoFinal = null;
+        let sueldoFinal = 0.00;
         if (sue_emp !== undefined && sue_emp !== null && sue_emp !== '') {
             const numSueldo = parseFloat(sue_emp);
             if (isNaN(numSueldo) || numSueldo < 0) {
@@ -753,7 +766,7 @@ app.post('/api/empleados', async (req, res) => {
             if (!regexCurp.test(curpLimpio)) {
                 return res.status(400).json({
                     exito: false,
-                    error: 'El formato de la CURP es inválido. Debe contener exactamente 18 caracteres alfanuméricos según el formato oficial mexicano (ejemplo: ABCD000101HDFRND01).'
+                    error: 'El formato de la CURP es inválido. Debe contener exactamente 18 caracteres alfanuméricos según el formato oficial mexicano (ejemplo: GARC850101HDFRRN09).'
                 });
             }
 
@@ -836,10 +849,10 @@ app.post('/api/catalogo-servicios', validacionesCatalogoServicio, async (req, re
 
         const { nom_serv, desc_serv, costo_est } = req.body || {};
         
-        if (!nom_serv || typeof nom_serv !== 'string' || !nom_serv.trim()) {
+        if (!nom_serv || typeof nom_serv !== 'string' || !nom_serv.trim() || !esNombreValido(nom_serv)) {
             return res.status(400).json({ 
                 exito: false, 
-                error: 'El nombre del servicio es obligatorio y no puede estar vacío ni compuesto solo por espacios vacíos (RN-12).' 
+                error: 'El nombre del servicio es obligatorio, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (RN-12 / E15).' 
             });
         }
 
@@ -900,10 +913,10 @@ app.post('/api/productos', async (req, res) => {
     try {
         const { tip_pro, desc_pro, stock_pro, prec_pro, id_prov } = req.body || {};
 
-        if (!desc_pro || typeof desc_pro !== 'string' || !desc_pro.trim()) {
+        if (!desc_pro || typeof desc_pro !== 'string' || !desc_pro.trim() || !esNombreValido(desc_pro)) {
             return res.status(400).json({ 
                 exito: false, 
-                error: 'La descripción del producto es obligatoria y no puede estar vacía ni compuesta solo por espacios.' 
+                error: 'La descripción del producto es obligatoria, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' 
             });
         }
 
@@ -972,6 +985,9 @@ const validacionesPlanta = [
         .trim()
         .notEmpty().withMessage('El nombre científico de la planta es obligatorio.')
         .custom((valor) => {
+            if (!esNombreValido(valor)) {
+                throw new Error('El nombre científico debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).');
+            }
             if (contieneSqlOHtml(valor)) {
                 throw new Error('El nombre científico contiene instrucciones SQL o etiquetas HTML no permitidas.');
             }
@@ -982,6 +998,9 @@ const validacionesPlanta = [
         .trim()
         .notEmpty().withMessage('El nombre común de la planta es obligatorio.')
         .custom((valor) => {
+            if (!esNombreValido(valor)) {
+                throw new Error('El nombre común debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).');
+            }
             if (contieneSqlOHtml(valor)) {
                 throw new Error('El nombre común contiene instrucciones SQL o etiquetas HTML no permitidas.');
             }
@@ -1054,12 +1073,12 @@ app.post('/api/plantas', validacionesPlanta, async (req, res) => {
 
         const { tipo, cientifico, comun, tamano, stock, precio, proveedor } = req.body || {};
 
-        if (!cientifico || typeof cientifico !== 'string' || !cientifico.trim() || contieneSqlOHtml(cientifico)) {
-            return res.status(400).json({ exito: false, error: 'El nombre científico contiene instrucciones SQL o etiquetas HTML no permitidas o está vacío.' });
+        if (!cientifico || typeof cientifico !== 'string' || !cientifico.trim() || !esNombreValido(cientifico) || contieneSqlOHtml(cientifico)) {
+            return res.status(400).json({ exito: false, error: 'El nombre científico debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' });
         }
 
-        if (!comun || typeof comun !== 'string' || !comun.trim() || contieneSqlOHtml(comun)) {
-            return res.status(400).json({ exito: false, error: 'El nombre común contiene instrucciones SQL o etiquetas HTML no permitidas o está vacío.' });
+        if (!comun || typeof comun !== 'string' || !comun.trim() || !esNombreValido(comun) || contieneSqlOHtml(comun)) {
+            return res.status(400).json({ exito: false, error: 'El nombre común debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' });
         }
 
         if (!proveedor || typeof proveedor !== 'string' || !proveedor.trim() || contieneSqlOHtml(proveedor)) {
@@ -1252,10 +1271,10 @@ app.post('/api/servicios', validacionesServicio, async (req, res) => {
         const { id_serv, id_cli, trabajo, trab_real, trabalho, fecha_ejec, fecha, costo, costo_serv, id_emp } = req.body || {};
 
         const trabajoEntrada = trabajo || trab_real || trabalho || req.body?.TRAB_REAL || req.body?.desc_serv || req.body?.descripcion;
-        if (!trabajoEntrada || typeof trabajoEntrada !== 'string' || !trabajoEntrada.trim()) {
+        if (!trabajoEntrada || typeof trabajoEntrada !== 'string' || !trabajoEntrada.trim() || !esNombreValido(trabajoEntrada)) {
             return res.status(400).json({ 
                 exito: false, 
-                error: 'La descripción del trabajo realizado es obligatoria.' 
+                error: 'La descripción del trabajo realizado es obligatoria, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' 
             });
         }
 
@@ -1945,8 +1964,8 @@ app.post('/api/usuarios', async (req, res) => {
 
         const { username, password, rol, id_emp } = req.body || {};
 
-        if (!username || typeof username !== 'string' || !username.trim()) {
-            return res.status(400).json({ exito: false, error: 'El nombre de usuario es obligatorio.' });
+        if (!username || typeof username !== 'string' || !username.trim() || !esNombreValido(username)) {
+            return res.status(400).json({ exito: false, error: 'El nombre de usuario es obligatorio, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' });
         }
 
         usernameLimpio = username.trim();
@@ -2154,8 +2173,8 @@ app.put('/api/usuarios/:id', async (req, res) => {
 
         let usernameLimpio = null;
         if (usernameVal !== undefined) {
-            if (!usernameVal || typeof usernameVal !== 'string' || !usernameVal.trim()) {
-                return res.status(400).json({ exito: false, error: 'El nombre de usuario no puede estar vacío.' });
+            if (!usernameVal || typeof usernameVal !== 'string' || !usernameVal.trim() || !esNombreValido(usernameVal)) {
+                return res.status(400).json({ exito: false, error: 'El nombre de usuario no puede estar vacío, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' });
             }
             usernameLimpio = usernameVal.trim();
 
@@ -2497,8 +2516,8 @@ app.put('/api/empleados/:id', async (req, res) => {
         const hor_emp_val = hor_emp !== undefined ? hor_emp : req.body?.HOR_EMP;
         const sue_emp_val = sue_emp !== undefined ? sue_emp : (sueldo !== undefined ? sueldo : req.body?.SUE_EMP);
 
-        if (nom_emp_val !== undefined && (!nom_emp_val || typeof nom_emp_val !== 'string' || !nom_emp_val.trim())) {
-            return res.status(400).json({ exito: false, error: 'El nombre del empleado no puede estar vacío.' });
+        if (nom_emp_val !== undefined && (!nom_emp_val || typeof nom_emp_val !== 'string' || !nom_emp_val.trim() || !esNombreValido(nom_emp_val))) {
+            return res.status(400).json({ exito: false, error: 'El nombre del empleado no puede estar vacío, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).' });
         }
 
         let updates = [];
@@ -2520,7 +2539,7 @@ app.put('/api/empleados/:id', async (req, res) => {
                 if (!regexCurp.test(curpValLimpia)) {
                     return res.status(400).json({
                         exito: false,
-                        error: 'El formato de la CURP es inválido. Debe contener exactamente 18 caracteres alfanuméricos según el formato oficial mexicano (ejemplo: ABCD000101HDFRND01).'
+                        error: 'El formato de la CURP es inválido. Debe contener exactamente 18 caracteres alfanuméricos según el formato oficial mexicano (ejemplo: GARC850101HDFRRN09).'
                     });
                 }
                 const checkCurp = await pool.query('SELECT COUNT(*) AS "total" FROM EMPLEADOS WHERE UPPER(CURP_EMP) = $1 AND ID_EMP <> $2', [curpValLimpia, id_emp]);
@@ -3095,7 +3114,7 @@ app.put('/api/actualizar', async (req, res) => {
                 if (!regexCurp.test(curpLimpio)) {
                     return res.status(400).json({
                         exito: false,
-                        error: 'El formato de la CURP es inválido. Debe contener exactamente 18 caracteres alfanuméricos según el formato oficial mexicano (ejemplo: ABCD000101HDFRND01).'
+                        error: 'El formato de la CURP es inválido. Debe contener exactamente 18 caracteres alfanuméricos según el formato oficial mexicano (ejemplo: GARC850101HDFRRN09).'
                     });
                 }
                 const checkCurp = await pool.query(`
@@ -3142,6 +3161,15 @@ app.put('/api/actualizar', async (req, res) => {
                 // Sanitizar y redondear campos monetarios para evitar residuos de flotantes (N6)
                 if (valor !== '' && valor !== null && valor !== undefined) {
                     const keyUpper = key.toUpperCase();
+                    // Validación compartida de nombres (E15 / N1): mínimo 2 caracteres y al menos 2 letras
+                    if (['NOM_PROV', 'NOM_CLI', 'NOM_EMP', 'DESC_PRO', 'NOM_CTFO', 'NOM_COM', 'NOM_SERV', 'TRAB_REAL', 'USERNAME'].includes(keyUpper)) {
+                        if (!esNombreValido(String(valor))) {
+                            return res.status(400).json({
+                                exito: false,
+                                error: `El campo ${key} debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).`
+                            });
+                        }
+                    }
                     if (keyUpper.includes('PREC') || keyUpper.includes('COSTO') || keyUpper.includes('TOT') || keyUpper.includes('SUE') || keyUpper.includes('SALDO')) {
                         const numVal = parseFloat(valor);
                         if (!isNaN(numVal)) {

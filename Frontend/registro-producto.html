@@ -101,16 +101,24 @@
                 });
         };
 
+        function esNombreValido(str) {
+            if (!str || typeof str !== 'string') return false;
+            const limpio = str.trim();
+            if (limpio.length < 2) return false;
+            const letras = limpio.match(/[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ]/g);
+            return (letras ? letras.length : 0) >= 2;
+        }
+
         function guardarProducto(event) {
             event.preventDefault();
             const desc_pro = document.getElementById('desc_pro').value.trim();
             const id_prov = document.getElementById('id_prov').value;
 
             // Validación con trim(): Solo descripción y proveedor son obligatorios (CU-19 / CU-20 / RN-31 / CU-08 FA-03)
-            if (!desc_pro) {
+            if (!desc_pro || !esNombreValido(desc_pro)) {
                 esExito = false;
                 document.getElementById('tituloModal').innerText = "Validación";
-                document.getElementById('textoModal').innerText = "La descripción del producto es obligatoria y no puede estar vacía ni contener solo espacios.";
+                document.getElementById('textoModal').innerText = "La descripción del producto es obligatoria, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).";
                 document.getElementById('modalMensaje').style.display = 'flex';
                 return;
             }

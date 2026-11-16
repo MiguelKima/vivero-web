@@ -178,6 +178,14 @@
             }
         }
 
+        function esNombreValido(str) {
+            if (!str || typeof str !== 'string') return false;
+            const limpio = str.trim();
+            if (limpio.length < 2) return false;
+            const letras = limpio.match(/[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ]/g);
+            return (letras ? letras.length : 0) >= 2;
+        }
+
         function guardarServicio(event) {
             event.preventDefault();
             
@@ -198,9 +206,9 @@
             }
             const id_emp = document.getElementById('id_emp').value;
 
-            if (!trabajo) {
+            if (!trabajo || !esNombreValido(trabajo)) {
                 document.getElementById('tituloModal').innerText = "Aviso";
-                document.getElementById('textoModal').innerText = "La descripción del trabajo es obligatoria.";
+                document.getElementById('textoModal').innerText = "La descripción del trabajo es obligatoria, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).";
                 document.getElementById('modalMensaje').style.display = 'flex';
                 return;
             }

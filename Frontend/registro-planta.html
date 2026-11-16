@@ -116,17 +116,25 @@
             return regexSql.test(valor) || regexHtml.test(valor);
         }
 
+        function esNombreValido(str) {
+            if (!str || typeof str !== 'string') return false;
+            const limpio = str.trim();
+            if (limpio.length < 2) return false;
+            const letras = limpio.match(/[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ]/g);
+            return (letras ? letras.length : 0) >= 2;
+        }
+
         function guardarPlanta(event) {
             event.preventDefault();
             const cientifico = document.getElementById('cientifico').value.trim();
             const comun = document.getElementById('comun').value.trim();
             const proveedor = document.getElementById('proveedor').value;
 
-            // Validación: Nombre científico, nombre común y proveedor obligatorios (CU-23 / RN-12)
-            if (!cientifico) {
+            // Validación: Nombre científico, nombre común y proveedor obligatorios (CU-23 / RN-12 / E15)
+            if (!cientifico || !esNombreValido(cientifico)) {
                 esExito = false;
                 document.getElementById('tituloModal').innerText = "Validación";
-                document.getElementById('textoModal').innerText = "El nombre científico de la planta es obligatorio.";
+                document.getElementById('textoModal').innerText = "El nombre científico de la planta es obligatorio, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).";
                 document.getElementById('modalMensaje').style.display = 'flex';
                 return;
             }
@@ -140,10 +148,10 @@
                 return;
             }
 
-            if (!comun) {
+            if (!comun || !esNombreValido(comun)) {
                 esExito = false;
                 document.getElementById('tituloModal').innerText = "Validación";
-                document.getElementById('textoModal').innerText = "El nombre común de la planta es obligatorio.";
+                document.getElementById('textoModal').innerText = "El nombre común de la planta es obligatorio, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).";
                 document.getElementById('modalMensaje').style.display = 'flex';
                 return;
             }

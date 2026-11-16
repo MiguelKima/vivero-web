@@ -55,7 +55,7 @@
         <!-- Formulario de Alta -->
         <div class="card" style="max-width: 600px; margin: auto; margin-bottom: 30px;">
             <h2>Alta de Nuevo Usuario del Sistema</h2>
-            <form onsubmit="guardarUsuario(event)">
+            <form novalidate onsubmit="guardarUsuario(event)">
                 <div class="form-group">
                     <label>Nombre de Usuario (Máx. 80 caracteres):</label>
                     <input type="text" id="username" required maxlength="80" placeholder="Ej. jperez">
@@ -274,6 +274,14 @@
             });
         }
 
+        function esNombreValido(str) {
+            if (!str || typeof str !== 'string') return false;
+            const limpio = str.trim();
+            if (limpio.length < 2) return false;
+            const letras = limpio.match(/[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ]/g);
+            return (letras ? letras.length : 0) >= 2;
+        }
+
         function guardarUsuario(event) {
             event.preventDefault();
             const username = document.getElementById('username').value.trim();
@@ -281,10 +289,10 @@
             const rol = document.getElementById('rol').value;
             const idEmpVal = document.getElementById('id_emp').value;
 
-            if (!username) {
+            if (!username || !esNombreValido(username)) {
                 esExito = false;
                 document.getElementById('tituloModal').innerText = "Validación";
-                document.getElementById('textoModal').innerText = "El nombre de usuario es obligatorio.";
+                document.getElementById('textoModal').innerText = "El nombre de usuario es obligatorio, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).";
                 document.getElementById('modalMensaje').style.display = 'flex';
                 return;
             }
@@ -387,8 +395,8 @@
             const nuevoRol = document.getElementById('edit_rol').value;
             const nuevoIdEmp = document.getElementById('edit_id_emp').value;
 
-            if (!nuevoUsername) {
-                mostrarAviso("Validación", "El nombre de usuario no puede estar vacío.", false);
+            if (!nuevoUsername || !esNombreValido(nuevoUsername)) {
+                mostrarAviso("Validación", "El nombre de usuario es obligatorio, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).", false);
                 return;
             }
 

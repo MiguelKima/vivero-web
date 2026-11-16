@@ -251,6 +251,8 @@
                     let val = item[k] !== null && item[k] !== undefined ? item[k] : '';
                     if (typeof val === 'number' && (k.includes('PREC') || k.includes('COSTO') || k.includes('TOT') || k.includes('SUE') || k.includes('SALDO'))) {
                         html += `<td>$${val.toFixed(2)}</td>`;
+                    } else if (val === '' && (k.includes('PREC') || k.includes('COSTO') || k.includes('TOT') || k.includes('SUE') || k.includes('SALDO'))) {
+                        html += `<td>$0.00</td>`;
                     } else {
                         html += `<td>${escapeHtml(val)}</td>`;
                     }
@@ -314,7 +316,7 @@
             if (tabla === 'EMPLEADOS' || tabla.toUpperCase() === 'EMPLEADOS') {
                 if (!('NOM_EMP' in item)) item['NOM_EMP'] = '';
                 if (!('PUE_EMP' in item)) item['PUE_EMP'] = '';
-                if (!('SUE_EMP' in item)) item['SUE_EMP'] = 0;
+                if (!('SUE_EMP' in item) || item['SUE_EMP'] === null || item['SUE_EMP'] === undefined || item['SUE_EMP'] === '') item['SUE_EMP'] = 0;
                 if (!('CURP_EMP' in item)) item['CURP_EMP'] = '';
                 if (!('DIR_EMP' in item)) item['DIR_EMP'] = '';
                 if (!('HOR_EMP' in item)) item['HOR_EMP'] = '';
@@ -496,6 +498,14 @@
             document.getElementById('modalEditor').style.display = 'flex';
         }
 
+        function esNombreValido(str) {
+            if (!str || typeof str !== 'string') return false;
+            const limpio = str.trim();
+            if (limpio.length < 2) return false;
+            const letras = limpio.match(/[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ]/g);
+            return (letras ? letras.length : 0) >= 2;
+        }
+
         async function guardarEdicion(event) {
             event.preventDefault();
             const tabla = document.getElementById('editTabla').value;
@@ -510,6 +520,21 @@
                     campos[key] = input.value;
                 }
             });
+
+            // Validación compartida de nombres (E15 / N1): mínimo 2 caracteres y al menos 2 letras
+            const camposNombre = ['NOM_PROV', 'NOM_CLI', 'NOM_EMP', 'DESC_PRO', 'NOM_CTFO', 'NOM_COM', 'NOM_SERV', 'TRAB_REAL', 'USERNAME'];
+            for (const key of Object.keys(campos)) {
+                const keyUpper = key.toUpperCase();
+                if (camposNombre.includes(keyUpper)) {
+                    const val = campos[key];
+                    if (val !== undefined && val !== null && String(val).trim() !== '') {
+                        if (!esNombreValido(String(val))) {
+                            mostrarMensaje("Nombre Inválido", `El campo ${key} debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).`);
+                            return;
+                        }
+                    }
+                }
+            }
 
             // Validación y sanitización específica para CLIENTES (CU-11 / CU-12 / CU-16 / CU-42 / CU-43 / CU-44 / CU-47 / CU-52 / RN-18 / V-01 / V-07)
             if (tabla.toUpperCase() === 'CLIENTES') {

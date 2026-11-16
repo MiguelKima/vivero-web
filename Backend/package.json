@@ -8,7 +8,8 @@
     "test": "node test-cu14.js",
     "test:cu14": "node test-cu14.js",
     "test:e9": "node test-e9.js",
-    "test:zeros": "node test-regression-zeros.js"
+    "test:zeros": "node test-regression-zeros.js",
+    "test:e15": "node test-e15-e18.js"
   },
   "keywords": [],
   "author": "",

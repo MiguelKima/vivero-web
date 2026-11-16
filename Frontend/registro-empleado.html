@@ -67,7 +67,7 @@
 
                 <div class="form-group">
                     <label>CURP (Opcional):</label>
-                    <input type="text" id="curp_emp" maxlength="18" placeholder="Ej. KILM000000XXXXXX00">
+                    <input type="text" id="curp_emp" maxlength="18" placeholder="Ej. GARC850101HDFRRN09">
                 </div>
 
                 <div class="form-group">
@@ -140,15 +140,23 @@
             }
         }
 
+        function esNombreValido(str) {
+            if (!str || typeof str !== 'string') return false;
+            const limpio = str.trim();
+            if (limpio.length < 2) return false;
+            const letras = limpio.match(/[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ]/g);
+            return (letras ? letras.length : 0) >= 2;
+        }
+
         function guardarEmpleado(event) {
             event.preventDefault();
             // Validación con trim() para evitar nombres vacíos o solo con espacios (CU-15 / RN-12)
             const nom_emp = document.getElementById('nom_emp').value.trim();
 
-            if (!nom_emp) {
+            if (!nom_emp || !esNombreValido(nom_emp)) {
                 esExito = false;
                 document.getElementById('tituloModal').innerText = "Validación";
-                document.getElementById('textoModal').innerText = "El nombre del empleado es obligatorio y no puede estar vacío ni contener solo espacios.";
+                document.getElementById('textoModal').innerText = "El nombre del empleado es obligatorio, debe tener al menos 2 caracteres y contener un mínimo de 2 letras (E15).";
                 document.getElementById('modalMensaje').style.display = 'flex';
                 return;
             }
@@ -163,7 +171,7 @@
             }
 
             const sueVal = document.getElementById('sue_emp').value;
-            let sueldoNum = null;
+            let sueldoNum = 0.00;
 
             if (sueVal !== '') {
                 sueldoNum = parseFloat(sueVal);
@@ -184,7 +192,7 @@
                 if (!regexCurp.test(curpVal)) {
                     esExito = false;
                     document.getElementById('tituloModal').innerText = "Formato de CURP Inválido";
-                    document.getElementById('textoModal').innerText = "La CURP debe tener exactamente 18 caracteres alfanuméricos y cumplir con la estructura oficial mexicana (ejemplo: ABCD000101HDFRND01).";
+                    document.getElementById('textoModal').innerText = "La CURP debe tener exactamente 18 caracteres alfanuméricos y cumplir con la estructura oficial mexicana (ejemplo: GARC850101HDFRRN09).";
                     document.getElementById('modalMensaje').style.display = 'flex';
                     return;
                 }
